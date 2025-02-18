@@ -5,12 +5,17 @@ import {
   editPrivateMessage,
   editWith,
   enableDownvotes,
-  getCommentParentId,
   myAuth,
   setIsoData,
   updatePersonBlock,
+  voteDisplayMode,
 } from "@utils/app";
-import { capitalizeFirstLetter, randomStr } from "@utils/helpers";
+import {
+  capitalizeFirstLetter,
+  randomStr,
+  resourcesSettled,
+} from "@utils/helpers";
+import { scrollMixin } from "../mixins/scroll-mixin";
 import { RouteDataResponse } from "@utils/types";
 import classNames from "classnames";
 import { Component, linkEvent } from "inferno";
@@ -22,7 +27,6 @@ import {
   BanPerson,
   BanPersonResponse,
   BlockPerson,
-  CommentId,
   CommentReplyResponse,
   CommentReplyView,
   CommentReportResponse,
@@ -80,6 +84,10 @@ import { Icon, Spinner } from "../common/icon";
 import { Paginator } from "../common/paginator";
 import { PrivateMessage } from "../private_message/private-message";
 import { getHttpBaseInternal } from "../../utils/env";
+import { CommentsLoadingSkeleton } from "../common/loading-skeleton";
+import { RouteComponentProps } from "inferno-router/dist/Route";
+import { IRoutePropsWithFetch } from "../../routes";
+import { isBrowser } from "@utils/browser";
 
 enum UnreadOrAll {
   Unread,
@@ -122,11 +130,19 @@ interface InboxState {
   sort: CommentSortType;
   page: number;
   siteRes: GetSiteResponse;
-  finished: Map<CommentId, boolean | undefined>;
   isIsomorphic: boolean;
 }
 
-export class Inbox extends Component<any, InboxState> {
+type InboxRouteProps = RouteComponentProps<Record<string, never>> &
+  Record<string, never>;
+export type InboxFetchConfig = IRoutePropsWithFetch<
+  InboxData,
+  Record<string, never>,
+  Record<string, never>
+>;
+
+@scrollMixin
+export class Inbox extends Component<InboxRouteProps, InboxState> {
   private isoData = setIsoData<InboxData>(this.context);
   state: InboxState = {
     unreadOrAll: UnreadOrAll.Unread,
@@ -138,9 +154,16 @@ export class Inbox extends Component<any, InboxState> {
     mentionsRes: EMPTY_REQUEST,
     messagesRes: EMPTY_REQUEST,
     markAllAsReadRes: EMPTY_REQUEST,
-    finished: new Map(),
     isIsomorphic: false,
   };
+
+  loadingSettled() {
+    return resourcesSettled([
+      this.state.repliesRes,
+      this.state.mentionsRes,
+      this.state.messagesRes,
+    ]);
+  }
 
   constructor(props: any, context: any) {
     super(props, context);
@@ -187,8 +210,8 @@ export class Inbox extends Component<any, InboxState> {
     }
   }
 
-  async componentDidMount() {
-    if (!this.state.isIsomorphic) {
+  async componentWillMount() {
+    if (!this.state.isIsomorphic && isBrowser()) {
       await this.refetch();
     }
   }
@@ -475,6 +498,7 @@ export class Inbox extends Component<any, InboxState> {
   }
 
   renderReplyType(i: ReplyType) {
+    const siteRes = this.state.siteRes;
     switch (i.type_) {
       case ReplyEnum.Reply:
         return (
@@ -484,13 +508,13 @@ export class Inbox extends Component<any, InboxState> {
               { comment_view: i.view as CommentView, children: [], depth: 0 },
             ]}
             viewType={CommentViewType.Flat}
-            finished={this.state.finished}
             markable
             showCommunity
             showContext
-            enableDownvotes={enableDownvotes(this.state.siteRes)}
-            allLanguages={this.state.siteRes.all_languages}
-            siteLanguages={this.state.siteRes.discussion_languages}
+            enableDownvotes={enableDownvotes(siteRes)}
+            voteDisplayMode={voteDisplayMode(siteRes)}
+            allLanguages={siteRes.all_languages}
+            siteLanguages={siteRes.discussion_languages}
             onSaveComment={this.handleSaveComment}
             onBlockPerson={this.handleBlockPerson}
             onDeleteComment={this.handleDeleteComment}
@@ -522,14 +546,14 @@ export class Inbox extends Component<any, InboxState> {
                 depth: 0,
               },
             ]}
-            finished={this.state.finished}
             viewType={CommentViewType.Flat}
             markable
             showCommunity
             showContext
-            enableDownvotes={enableDownvotes(this.state.siteRes)}
-            allLanguages={this.state.siteRes.all_languages}
-            siteLanguages={this.state.siteRes.discussion_languages}
+            enableDownvotes={enableDownvotes(siteRes)}
+            voteDisplayMode={voteDisplayMode(siteRes)}
+            allLanguages={siteRes.all_languages}
+            siteLanguages={siteRes.discussion_languages}
             onSaveComment={this.handleSaveComment}
             onBlockPerson={this.handleBlockPerson}
             onDeleteComment={this.handleDeleteComment}
@@ -573,11 +597,7 @@ export class Inbox extends Component<any, InboxState> {
       this.state.mentionsRes.state === "loading" ||
       this.state.messagesRes.state === "loading"
     ) {
-      return (
-        <h1 className="h4">
-          <Spinner large />
-        </h1>
-      );
+      return <CommentsLoadingSkeleton />;
     } else {
       return (
         <div>{this.buildCombined().map(r => this.renderReplyType(r))}</div>
@@ -586,13 +606,10 @@ export class Inbox extends Component<any, InboxState> {
   }
 
   replies() {
+    const siteRes = this.state.siteRes;
     switch (this.state.repliesRes.state) {
       case "loading":
-        return (
-          <h1 className="h4">
-            <Spinner large />
-          </h1>
-        );
+        return <CommentsLoadingSkeleton />;
       case "success": {
         const replies = this.state.repliesRes.data.replies;
         return (
@@ -600,13 +617,13 @@ export class Inbox extends Component<any, InboxState> {
             <CommentNodes
               nodes={commentsToFlatNodes(replies)}
               viewType={CommentViewType.Flat}
-              finished={this.state.finished}
               markable
               showCommunity
               showContext
-              enableDownvotes={enableDownvotes(this.state.siteRes)}
-              allLanguages={this.state.siteRes.all_languages}
-              siteLanguages={this.state.siteRes.discussion_languages}
+              enableDownvotes={enableDownvotes(siteRes)}
+              voteDisplayMode={voteDisplayMode(siteRes)}
+              allLanguages={siteRes.all_languages}
+              siteLanguages={siteRes.discussion_languages}
               onSaveComment={this.handleSaveComment}
               onBlockPerson={this.handleBlockPerson}
               onDeleteComment={this.handleDeleteComment}
@@ -633,13 +650,10 @@ export class Inbox extends Component<any, InboxState> {
   }
 
   mentions() {
+    const siteRes = this.state.siteRes;
     switch (this.state.mentionsRes.state) {
       case "loading":
-        return (
-          <h1 className="h4">
-            <Spinner large />
-          </h1>
-        );
+        return <CommentsLoadingSkeleton />;
       case "success": {
         const mentions = this.state.mentionsRes.data.mentions;
         return (
@@ -649,13 +663,13 @@ export class Inbox extends Component<any, InboxState> {
                 key={umv.person_mention.id}
                 nodes={[{ comment_view: umv, children: [], depth: 0 }]}
                 viewType={CommentViewType.Flat}
-                finished={this.state.finished}
                 markable
                 showCommunity
                 showContext
-                enableDownvotes={enableDownvotes(this.state.siteRes)}
-                allLanguages={this.state.siteRes.all_languages}
-                siteLanguages={this.state.siteRes.discussion_languages}
+                enableDownvotes={enableDownvotes(siteRes)}
+                voteDisplayMode={voteDisplayMode(siteRes)}
+                allLanguages={siteRes.all_languages}
+                siteLanguages={siteRes.discussion_languages}
                 onSaveComment={this.handleSaveComment}
                 onBlockPerson={this.handleBlockPerson}
                 onDeleteComment={this.handleDeleteComment}
@@ -685,11 +699,7 @@ export class Inbox extends Component<any, InboxState> {
   messages() {
     switch (this.state.messagesRes.state) {
       case "loading":
-        return (
-          <h1 className="h4">
-            <Spinner large />
-          </h1>
-        );
+        return <CommentsLoadingSkeleton />;
       case "success": {
         const messages = this.state.messagesRes.data.private_messages;
         return (
@@ -767,40 +777,60 @@ export class Inbox extends Component<any, InboxState> {
     return inboxData;
   }
 
+  refetchToken?: symbol;
   async refetch() {
+    const token = (this.refetchToken = Symbol());
     const sort = this.state.sort;
     const unread_only = this.state.unreadOrAll === UnreadOrAll.Unread;
     const page = this.state.page;
     const limit = fetchLimit;
 
-    this.setState({ repliesRes: LOADING_REQUEST });
     this.setState({
-      repliesRes: await HttpService.client.getReplies({
+      repliesRes: LOADING_REQUEST,
+      mentionsRes: LOADING_REQUEST,
+      messagesRes: LOADING_REQUEST,
+    });
+    const repliesPromise = HttpService.client
+      .getReplies({
         sort,
         unread_only,
         page,
         limit,
-      }),
-    });
+      })
+      .then(repliesRes => {
+        if (token === this.refetchToken) {
+          this.setState({
+            repliesRes,
+          });
+        }
+      });
 
-    this.setState({ mentionsRes: LOADING_REQUEST });
-    this.setState({
-      mentionsRes: await HttpService.client.getPersonMentions({
+    const mentionsPromise = HttpService.client
+      .getPersonMentions({
         sort,
         unread_only,
         page,
         limit,
-      }),
-    });
+      })
+      .then(mentionsRes => {
+        if (token === this.refetchToken) {
+          this.setState({ mentionsRes });
+        }
+      });
 
-    this.setState({ messagesRes: LOADING_REQUEST });
-    this.setState({
-      messagesRes: await HttpService.client.getPrivateMessages({
+    const messagesPromise = HttpService.client
+      .getPrivateMessages({
         unread_only,
         page,
         limit,
-      }),
-    });
+      })
+      .then(messagesRes => {
+        if (token === this.refetchToken) {
+          this.setState({ messagesRes });
+        }
+      });
+
+    await Promise.all([repliesPromise, mentionsPromise, messagesPromise]);
     UnreadCounterService.Instance.updateInboxCounts();
   }
 
@@ -958,9 +988,13 @@ export class Inbox extends Component<any, InboxState> {
     this.findAndUpdateMessage(res);
   }
 
-  async handleEditMessage(form: EditPrivateMessage) {
+  async handleEditMessage(form: EditPrivateMessage): Promise<boolean> {
     const res = await HttpService.client.editPrivateMessage(form);
     this.findAndUpdateMessage(res);
+    if (res.state === "failed") {
+      toast(I18NextService.i18n.t(res.err.message), "danger");
+    }
+    return res.state !== "failed";
   }
 
   async handleMarkMessageAsRead(form: MarkPrivateMessageAsRead) {
@@ -977,7 +1011,7 @@ export class Inbox extends Component<any, InboxState> {
     this.reportToast(res);
   }
 
-  async handleCreateMessage(form: CreatePrivateMessage) {
+  async handleCreateMessage(form: CreatePrivateMessage): Promise<boolean> {
     const res = await HttpService.client.createPrivateMessage(form);
     this.setState(s => {
       if (s.messagesRes.state === "success" && res.state === "success") {
@@ -988,6 +1022,10 @@ export class Inbox extends Component<any, InboxState> {
 
       return s;
     });
+    if (res.state === "failed") {
+      toast(I18NextService.i18n.t(res.err.message), "danger");
+    }
+    return res.state !== "failed";
   }
 
   findAndUpdateMessage(res: RequestState<PrivateMessageResponse>) {
@@ -1056,6 +1094,8 @@ export class Inbox extends Component<any, InboxState> {
   ) {
     if (res.state === "success") {
       toast(I18NextService.i18n.t("report_created"));
+    } else if (res.state === "failed") {
+      toast(I18NextService.i18n.t(res.err.message), "danger");
     }
   }
 
@@ -1075,11 +1115,6 @@ export class Inbox extends Component<any, InboxState> {
             s.mentionsRes.data.mentions,
           );
         }
-        // Set finished for the parent
-        s.finished.set(
-          getCommentParentId(res.data.comment_view.comment) ?? 0,
-          true,
-        );
         return s;
       });
     }

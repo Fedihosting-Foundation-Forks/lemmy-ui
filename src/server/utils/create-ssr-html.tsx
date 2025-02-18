@@ -7,6 +7,8 @@ import { favIconPngUrl, favIconUrl } from "../../shared/config";
 import { IsoDataOptionalSite } from "../../shared/interfaces";
 import { buildThemeList } from "./build-themes-list";
 import { fetchIconPng } from "./fetch-icon-png";
+import { findTranslationChunkNames } from "../../shared/services/I18NextService";
+import { findDateFnsChunkNames } from "../../shared/utils/app/setup-date-fns";
 
 const customHtmlHeader = process.env["LEMMY_UI_CUSTOM_HTML_HEADER"] || "";
 
@@ -16,6 +18,7 @@ export async function createSsrHtml(
   root: string,
   isoData: IsoDataOptionalSite,
   cspNonce: string,
+  userLanguages: readonly string[],
 ) {
   const site = isoData.site_res;
 
@@ -30,22 +33,29 @@ export async function createSsrHtml(
   );
 
   if (!appleTouchIcon) {
-    appleTouchIcon = site?.site_view.site.icon
-      ? `data:image/png;base64,${await sharp(
-          await fetchIconPng(site.site_view.site.icon),
-        )
-          .resize(180, 180)
-          .extend({
-            bottom: 20,
-            top: 20,
-            left: 20,
-            right: 20,
-            background: "#222222",
-          })
-          .png()
-          .toBuffer()
-          .then(buf => buf.toString("base64"))}`
-      : favIconPngUrl;
+    try {
+      appleTouchIcon = site?.site_view.site.icon
+        ? `data:image/png;base64,${await sharp(
+            await fetchIconPng(site.site_view.site.icon),
+          )
+            .resize(180, 180)
+            .extend({
+              bottom: 20,
+              top: 20,
+              left: 20,
+              right: 20,
+              background: "#222222",
+            })
+            .png()
+            .toBuffer()
+            .then(buf => buf.toString("base64"))}`
+        : favIconPngUrl;
+    } catch {
+      console.log(
+        "Could not fetch site logo for apple touch icon. Using default icon.",
+      );
+      appleTouchIcon = favIconPngUrl;
+    }
   }
 
   const erudaStr =
@@ -63,11 +73,28 @@ export async function createSsrHtml(
 
   const helmet = Helmet.renderStatic();
 
+  const lazyScripts = [
+    ...findTranslationChunkNames(userLanguages),
+    ...findDateFnsChunkNames(userLanguages),
+  ]
+    .filter(x => x !== undefined)
+    .map(x => `${getStaticDir()}/js/${x}.client.js`)
+    .map(x => `<link rel="preload" as="script" href="${x}" />`)
+    .join("");
+
   return `
     <!DOCTYPE html>
     <html ${helmet.htmlAttributes.toString()}>
     <head>
-    <script nonce="${cspNonce}">window.isoData = ${serialize(isoData)}</script>
+    <script nonce="${cspNonce}">
+    window.isoData = ${serialize(isoData)};
+
+    if (!document.documentElement.hasAttribute("data-bs-theme")) {
+      const light = window.matchMedia("(prefers-color-scheme: light)").matches;
+      document.documentElement.setAttribute("data-bs-theme", light ? "light" : "dark");
+    }
+    </script>
+    ${lazyScripts}
   
     <!-- A remote debugging utility for mobile -->
     ${erudaStr}
@@ -78,6 +105,17 @@ export async function createSsrHtml(
     ${helmet.title.toString()}
     ${helmet.meta.toString()}
   
+    <style>
+    #app[data-adult-consent] {
+      filter: blur(10px);
+      -webkit-filter: blur(10px);
+      -moz-filter: blur(10px);
+      -o-filter: blur(10px);
+      -ms-filter: blur(10px);
+      pointer-events: none;
+    }
+    </style>
+
     <!-- Required meta tags -->
     <meta name="Description" content="Lemmy">
     <meta charset="utf-8">

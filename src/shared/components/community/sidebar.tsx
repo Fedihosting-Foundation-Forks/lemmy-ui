@@ -1,4 +1,4 @@
-import { hostname } from "@utils/helpers";
+import { getQueryString, hostname } from "@utils/helpers";
 import { amAdmin, amMod, amTopMod } from "@utils/roles";
 import { Component, InfernoNode, linkEvent } from "inferno";
 import { T } from "inferno-i18next-dess";
@@ -25,6 +25,7 @@ import { SubscribeButton } from "../common/subscribe-button";
 import { CommunityForm } from "../community/community-form";
 import { CommunityLink } from "../community/community-link";
 import { PersonListing } from "../person/person-listing";
+import { tippyMixin } from "../mixins/tippy-mixin";
 
 interface SidebarProps {
   community_view: CommunityView;
@@ -60,6 +61,7 @@ interface SidebarState {
   purgeCommunityLoading: boolean;
 }
 
+@tippyMixin
 export class Sidebar extends Component<SidebarProps, SidebarState> {
   state: SidebarState = {
     showEdit: false,
@@ -76,6 +78,21 @@ export class Sidebar extends Component<SidebarProps, SidebarState> {
   constructor(props: any, context: any) {
     super(props, context);
     this.handleEditCancel = this.handleEditCancel.bind(this);
+  }
+
+  unlisten = () => {};
+
+  componentWillMount() {
+    // Leave edit mode on navigation
+    this.unlisten = this.context.router.history.listen(() => {
+      if (this.state.showEdit) {
+        this.setState({ showEdit: false });
+      }
+    });
+  }
+
+  componentWillUnmount(): void {
+    this.unlisten();
   }
 
   componentWillReceiveProps(
@@ -124,8 +141,9 @@ export class Sidebar extends Component<SidebarProps, SidebarState> {
   sidebar() {
     const myUserInfo = UserService.Instance.myUserInfo;
     const {
-      community: { name, actor_id, id, posting_restricted_to_mods },
+      community: { name, actor_id, id, posting_restricted_to_mods, visibility },
       counts,
+      banned_from_community,
     } = this.props.community_view;
     return (
       <aside className="mb-3">
@@ -134,14 +152,18 @@ export class Sidebar extends Component<SidebarProps, SidebarState> {
             <div className="card-body">
               {this.communityTitle()}
               {this.props.editable && this.adminButtons()}
-              <SubscribeButton
-                communityView={this.props.community_view}
-                onFollow={linkEvent(this, this.handleFollowCommunity)}
-                onUnFollow={linkEvent(this, this.handleUnfollowCommunity)}
-                loading={this.state.followCommunityLoading}
-              />
-              {this.canPost && this.createPost()}
-              {myUserInfo && this.blockCommunity()}
+              {!banned_from_community && (
+                <>
+                  <SubscribeButton
+                    communityView={this.props.community_view}
+                    onFollow={linkEvent(this, this.handleFollowCommunity)}
+                    onUnFollow={linkEvent(this, this.handleUnfollowCommunity)}
+                    loading={this.state.followCommunityLoading}
+                  />
+                  {this.canPost && this.createPost()}
+                  {myUserInfo && this.blockCommunity()}
+                </>
+              )}
               {!myUserInfo && (
                 <div className="alert alert-info" role="alert">
                   <T
@@ -174,7 +196,46 @@ export class Sidebar extends Component<SidebarProps, SidebarState> {
                   </T>
                 </div>
               )}
+              {banned_from_community && (
+                <div
+                  className="alert alert-danger text-sm-start text-xs-center"
+                  role="alert"
+                >
+                  <Icon
+                    icon="ban"
+                    inline
+                    classes="me-sm-2 mx-auto d-sm-inline d-block"
+                  />
+                  <T i18nKey="banned_from_community_blurb" className="d-inline">
+                    #<strong className="fw-bold">#</strong>#
+                  </T>
+                </div>
+              )}
               {this.description()}
+              <div>
+                <div className="fw-semibold mb-1">
+                  <span className="align-middle">
+                    {I18NextService.i18n.t("community_visibility")}:&nbsp;
+                  </span>
+                  <span className="fs-5 fw-medium align-middle">
+                    {I18NextService.i18n.t(
+                      visibility === "Public" ? "public" : "local_only",
+                    )}
+                    <Icon
+                      icon={visibility === "Public" ? "globe" : "house"}
+                      inline
+                      classes="ms-1 text-secondary"
+                    />
+                  </span>
+                </div>
+                <p>
+                  {I18NextService.i18n.t(
+                    visibility === "Public"
+                      ? "public_blurb"
+                      : "local_only_blurb",
+                  )}
+                </p>
+              </div>
               <Badges communityId={id} counts={counts} />
               {this.mods()}
             </div>
@@ -243,7 +304,10 @@ export class Sidebar extends Component<SidebarProps, SidebarState> {
         className={`btn btn-secondary d-block mb-2 w-100 ${
           cv.community.deleted || cv.community.removed ? "no-click" : ""
         }`}
-        to={`/create_post?communityId=${cv.community.id}`}
+        to={
+          "/create_post" +
+          getQueryString({ communityId: cv.community.id.toString() })
+        }
       >
         {I18NextService.i18n.t("create_a_post")}
       </Link>
@@ -271,7 +335,10 @@ export class Sidebar extends Component<SidebarProps, SidebarState> {
     const desc = this.props.community_view.community.description;
     return (
       desc && (
-        <div className="md-div" dangerouslySetInnerHTML={mdToHtml(desc)} />
+        <div
+          className="md-div"
+          dangerouslySetInnerHTML={mdToHtml(desc, () => this.forceUpdate())}
+        />
       )
     );
   }

@@ -1,6 +1,10 @@
-FROM node:20-alpine as builder
+FROM node:22-alpine as builder
 RUN apk update && apk add curl python3 build-base gcc wget git --no-cache
-RUN npm install -g pnpm
+
+# Install corepack
+RUN npm install -g corepack
+
+RUN corepack enable pnpm
 
 WORKDIR /usr/src/app
 
@@ -25,11 +29,12 @@ COPY .git .git
 
 # Set UI version 
 RUN echo "export const VERSION = 'dev';" > "src/shared/version.ts"
+RUN echo "export const BUILD_DATE_ISO8601 = '$(date -u +"%Y-%m-%dT%H:%M:%SZ")';" > "src/shared/build-date.ts"
 
 RUN pnpm i --prefer-offline
 RUN pnpm build:dev
 
-FROM node:20-alpine as runner
+FROM node:22-alpine as runner
 COPY --from=builder /usr/src/app/dist /app/dist
 COPY --from=builder /usr/src/app/node_modules /app/node_modules
 

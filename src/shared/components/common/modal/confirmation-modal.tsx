@@ -1,12 +1,14 @@
 import { Component, RefObject, createRef, linkEvent } from "inferno";
-import { I18NextService } from "../../services";
+import { I18NextService } from "../../../services";
 import type { Modal } from "bootstrap";
-import { Spinner } from "./icon";
-import { LoadingEllipses } from "./loading-ellipses";
+import { Spinner } from "../icon";
+import { LoadingEllipses } from "../loading-ellipses";
+import { modalMixin } from "../../mixins/modal-mixin";
+import { MouseEventHandler } from "inferno";
 
 interface ConfirmationModalProps {
   onYes: () => Promise<void>;
-  onNo: () => void;
+  onNo: MouseEventHandler<HTMLButtonElement>;
   message: string;
   loadingMessage: string;
   show: boolean;
@@ -22,13 +24,14 @@ async function handleYes(i: ConfirmationModal) {
   i.setState({ loading: false });
 }
 
+@modalMixin
 export default class ConfirmationModal extends Component<
   ConfirmationModalProps,
   ConfirmationModalState
 > {
   readonly modalDivRef: RefObject<HTMLDivElement>;
   readonly yesButtonRef: RefObject<HTMLButtonElement>;
-  modal: Modal;
+  modal?: Modal;
   state: ConfirmationModalState = {
     loading: false,
   };
@@ -38,41 +41,6 @@ export default class ConfirmationModal extends Component<
 
     this.modalDivRef = createRef();
     this.yesButtonRef = createRef();
-
-    this.handleShow = this.handleShow.bind(this);
-  }
-
-  async componentDidMount() {
-    this.modalDivRef.current?.addEventListener(
-      "shown.bs.modal",
-      this.handleShow,
-    );
-
-    const Modal = (await import("bootstrap/js/dist/modal")).default;
-    this.modal = new Modal(this.modalDivRef.current!);
-
-    if (this.props.show) {
-      this.modal.show();
-    }
-  }
-
-  componentWillUnmount() {
-    this.modalDivRef.current?.removeEventListener(
-      "shown.bs.modal",
-      this.handleShow,
-    );
-
-    this.modal.dispose();
-  }
-
-  componentDidUpdate({ show: prevShow }: ConfirmationModalProps) {
-    if (!!prevShow !== !!this.props.show) {
-      if (this.props.show) {
-        this.modal.show();
-      } else {
-        this.modal.hide();
-      }
-    }
   }
 
   render() {

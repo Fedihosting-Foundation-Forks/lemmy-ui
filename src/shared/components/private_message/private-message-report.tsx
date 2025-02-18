@@ -8,6 +8,7 @@ import { mdToHtml } from "../../markdown";
 import { I18NextService } from "../../services";
 import { Icon, Spinner } from "../common/icon";
 import { PersonListing } from "../person/person-listing";
+import { tippyMixin } from "../mixins/tippy-mixin";
 
 interface Props {
   report: PrivateMessageReportView;
@@ -18,6 +19,7 @@ interface State {
   loading: boolean;
 }
 
+@tippyMixin
 export class PrivateMessageReport extends Component<Props, State> {
   state: State = {
     loading: false,
@@ -52,7 +54,9 @@ export class PrivateMessageReport extends Component<Props, State> {
           {I18NextService.i18n.t("message")}:
           <div
             className="md-div"
-            dangerouslySetInnerHTML={mdToHtml(pmr.original_pm_text)}
+            dangerouslySetInnerHTML={mdToHtml(pmr.original_pm_text, () =>
+              this.forceUpdate(),
+            )}
           />
         </div>
         <div>

@@ -1,28 +1,29 @@
 import {
   commentsToFlatNodes,
+  commentToPostSortType,
   editComment,
   editPost,
   editWith,
   enableDownvotes,
   enableNsfw,
-  getCommentParentId,
   getDataTypeString,
   myAuth,
   postToCommentSortType,
   setIsoData,
   showLocal,
   updatePersonBlock,
+  voteDisplayMode,
 } from "@utils/app";
 import {
   getQueryParams,
   getQueryString,
-  getRandomFromList,
+  resourcesSettled,
 } from "@utils/helpers";
-import { canCreateCommunity } from "@utils/roles";
-import type { QueryParams } from "@utils/types";
+import { scrollMixin } from "../mixins/scroll-mixin";
+import type { QueryParams, StringBoolean } from "@utils/types";
 import { RouteDataResponse } from "@utils/types";
 import { NoOptionI18nKeys } from "i18next";
-import { Component, MouseEventHandler, linkEvent } from "inferno";
+import { Component, InfernoNode, MouseEventHandler, linkEvent } from "inferno";
 import { T } from "inferno-i18next-dess";
 import { Link } from "inferno-router";
 import {
@@ -33,7 +34,6 @@ import {
   BanPerson,
   BanPersonResponse,
   BlockPerson,
-  CommentId,
   CommentReplyResponse,
   CommentResponse,
   CreateComment,
@@ -52,9 +52,8 @@ import {
   GetPosts,
   GetPostsResponse,
   GetSiteResponse,
+  HidePost,
   LemmyHttp,
-  ListCommunities,
-  ListCommunitiesResponse,
   ListingType,
   LockPost,
   MarkCommentReplyAsRead,
@@ -68,11 +67,12 @@ import {
   RemovePost,
   SaveComment,
   SavePost,
-  SortType,
+  PostSortType,
   SuccessResponse,
   TransferCommunity,
+  CommentSortType,
 } from "lemmy-js-client";
-import { fetchLimit, relTags, trendingFetchLimit } from "../../config";
+import { fetchLimit, relTags } from "../../config";
 import {
   CommentViewType,
   DataType,
@@ -87,12 +87,12 @@ import {
   RequestState,
   wrapClient,
 } from "../../services/HttpService";
-import { setupTippy } from "../../tippy";
+import { tippyMixin } from "../mixins/tippy-mixin";
 import { toast } from "../../toast";
 import { CommentNodes } from "../comment/comment-nodes";
 import { DataTypeSelect } from "../common/data-type-select";
 import { HtmlTags } from "../common/html-tags";
-import { Icon, Spinner } from "../common/icon";
+import { Icon } from "../common/icon";
 import { ListingTypeSelect } from "../common/listing-type-select";
 import { SortSelect } from "../common/sort-select";
 import { CommunityLink } from "../community/community-link";
@@ -100,52 +100,56 @@ import { PostListings } from "../post/post-listings";
 import { SiteSidebar } from "./site-sidebar";
 import { PaginatorCursor } from "../common/paginator-cursor";
 import { getHttpBaseInternal } from "../../utils/env";
+import {
+  CommentsLoadingSkeleton,
+  PostsLoadingSkeleton,
+} from "../common/loading-skeleton";
+import { RouteComponentProps } from "inferno-router/dist/Route";
+import { IRoutePropsWithFetch } from "../../routes";
+import PostHiddenSelect from "../common/post-hidden-select";
+import { isBrowser, snapToTop } from "@utils/browser";
+import { CommentSortSelect } from "../common/comment-sort-select";
 
 interface HomeState {
   postsRes: RequestState<GetPostsResponse>;
   commentsRes: RequestState<GetCommentsResponse>;
-  trendingCommunitiesRes: RequestState<ListCommunitiesResponse>;
   showSubscribedMobile: boolean;
-  showTrendingMobile: boolean;
   showSidebarMobile: boolean;
   subscribedCollapsed: boolean;
-  scrolled: boolean;
   tagline?: string;
   siteRes: GetSiteResponse;
-  finished: Map<CommentId, boolean | undefined>;
   isIsomorphic: boolean;
 }
 
 interface HomeProps {
   listingType?: ListingType;
   dataType: DataType;
-  sort: SortType;
+  sort: PostSortType;
   pageCursor?: PaginationCursor;
+  showHidden?: StringBoolean;
 }
 
 type HomeData = RouteDataResponse<{
   postsRes: GetPostsResponse;
   commentsRes: GetCommentsResponse;
-  trendingCommunitiesRes: ListCommunitiesResponse;
 }>;
 
-function getRss(listingType: ListingType) {
-  const { sort } = getHomeQueryParams();
-
+function getRss(listingType: ListingType, sort: PostSortType) {
   let rss: string | undefined = undefined;
 
+  const queryString = getQueryString({ sort });
   switch (listingType) {
     case "All": {
-      rss = `/feeds/all.xml?sort=${sort}`;
+      rss = "/feeds/all.xml" + queryString;
       break;
     }
     case "Local": {
-      rss = `/feeds/local.xml?sort=${sort}`;
+      rss = "/feeds/local.xml" + queryString;
       break;
     }
     case "Subscribed": {
       const auth = myAuth();
-      rss = auth ? `/feeds/front/${auth}.xml?sort=${sort}` : undefined;
+      rss = auth ? `/feeds/front/${auth}.xml${queryString}` : undefined;
       break;
     }
   }
@@ -167,31 +171,48 @@ function getDataTypeFromQuery(type?: string): DataType {
 }
 
 function getListingTypeFromQuery(
-  type?: string,
-  myUserInfo = UserService.Instance.myUserInfo,
-): ListingType | undefined {
-  const myListingType =
-    myUserInfo?.local_user_view?.local_user?.default_listing_type;
-
-  return type ? (type as ListingType) : myListingType;
+  type: string | undefined,
+  fallback: ListingType,
+): ListingType {
+  return type ? (type as ListingType) : fallback;
 }
 
 function getSortTypeFromQuery(
-  type?: string,
-  myUserInfo = UserService.Instance.myUserInfo,
-): SortType {
-  const mySortType = myUserInfo?.local_user_view?.local_user?.default_sort_type;
-
-  return (type ? (type as SortType) : mySortType) ?? "Active";
+  type: string | undefined,
+  fallback: PostSortType,
+): PostSortType {
+  return type ? (type as PostSortType) : fallback;
 }
 
-function getHomeQueryParams() {
-  return getQueryParams<HomeProps>({
-    sort: getSortTypeFromQuery,
-    listingType: getListingTypeFromQuery,
-    pageCursor: cursor => cursor,
-    dataType: getDataTypeFromQuery,
-  });
+type Fallbacks = {
+  sort: PostSortType;
+  listingType: ListingType;
+};
+
+export function getHomeQueryParams(
+  source: string | undefined,
+  siteRes: GetSiteResponse,
+): HomeProps {
+  const myUserInfo = siteRes.my_user ?? UserService.Instance.myUserInfo;
+  const local_user = myUserInfo?.local_user_view.local_user;
+  const local_site = siteRes.site_view.local_site;
+  return getQueryParams<HomeProps, Fallbacks>(
+    {
+      sort: getSortTypeFromQuery,
+      listingType: getListingTypeFromQuery,
+      pageCursor: (cursor?: string) => cursor,
+      dataType: getDataTypeFromQuery,
+      showHidden: (include?: StringBoolean) => include,
+    },
+    source,
+    {
+      sort:
+        local_user?.default_post_sort_type ?? local_site.default_post_sort_type,
+      listingType:
+        local_user?.default_listing_type ??
+        local_site.default_post_listing_type,
+    },
+  );
 }
 
 const MobileButton = ({
@@ -212,40 +233,44 @@ const MobileButton = ({
   </button>
 );
 
-const LinkButton = ({
-  path,
-  translationKey,
-}: {
-  path: string;
-  translationKey: NoOptionI18nKeys;
-}) => (
-  <Link className="btn btn-secondary d-block" to={path}>
-    {I18NextService.i18n.t(translationKey)}
-  </Link>
-);
+type HomePathProps = Record<string, never>;
+type HomeRouteProps = RouteComponentProps<HomePathProps> & HomeProps;
+export type HomeFetchConfig = IRoutePropsWithFetch<
+  HomeData,
+  HomePathProps,
+  HomeProps
+>;
 
-export class Home extends Component<any, HomeState> {
+@scrollMixin
+@tippyMixin
+export class Home extends Component<HomeRouteProps, HomeState> {
   private isoData = setIsoData<HomeData>(this.context);
   state: HomeState = {
     postsRes: EMPTY_REQUEST,
     commentsRes: EMPTY_REQUEST,
-    trendingCommunitiesRes: EMPTY_REQUEST,
-    scrolled: true,
     siteRes: this.isoData.site_res,
     showSubscribedMobile: false,
-    showTrendingMobile: false,
     showSidebarMobile: false,
     subscribedCollapsed: false,
-    finished: new Map(),
     isIsomorphic: false,
   };
+
+  loadingSettled(): boolean {
+    return resourcesSettled([
+      this.props.dataType === DataType.Post
+        ? this.state.postsRes
+        : this.state.commentsRes,
+    ]);
+  }
 
   constructor(props: any, context: any) {
     super(props, context);
 
     this.handleSortChange = this.handleSortChange.bind(this);
+    this.handleCommentSortChange = this.handleCommentSortChange.bind(this);
     this.handleListingTypeChange = this.handleListingTypeChange.bind(this);
     this.handleDataTypeChange = this.handleDataTypeChange.bind(this);
+    this.handleShowHiddenChange = this.handleShowHiddenChange.bind(this);
     this.handlePageNext = this.handlePageNext.bind(this);
     this.handlePagePrev = this.handlePagePrev.bind(this);
 
@@ -276,53 +301,48 @@ export class Home extends Component<any, HomeState> {
     this.handleSavePost = this.handleSavePost.bind(this);
     this.handlePurgePost = this.handlePurgePost.bind(this);
     this.handleFeaturePost = this.handleFeaturePost.bind(this);
+    this.handleHidePost = this.handleHidePost.bind(this);
 
     // Only fetch the data if coming from another route
     if (FirstLoadService.isFirstLoad) {
-      const { trendingCommunitiesRes, commentsRes, postsRes } =
-        this.isoData.routeData;
+      const { commentsRes, postsRes } = this.isoData.routeData;
 
       this.state = {
         ...this.state,
-        trendingCommunitiesRes,
         commentsRes,
         postsRes,
         isIsomorphic: true,
       };
     }
 
-    this.state.tagline = getRandomFromList(
-      this.state?.siteRes?.taglines ?? [],
-    )?.content;
+    this.state.tagline = this.state?.siteRes?.tagline?.content;
   }
 
-  async componentDidMount() {
+  async componentWillMount() {
     if (
-      !this.state.isIsomorphic ||
-      !Object.values(this.isoData.routeData).some(
-        res => res.state === "success" || res.state === "failed",
-      )
+      (!this.state.isIsomorphic ||
+        !Object.values(this.isoData.routeData).some(
+          res => res.state === "success" || res.state === "failed",
+        )) &&
+      isBrowser()
     ) {
-      await Promise.all([this.fetchTrendingCommunities(), this.fetchData()]);
+      await this.fetchData(this.props);
     }
+  }
 
-    setupTippy();
+  componentWillReceiveProps(
+    nextProps: HomeRouteProps & { children?: InfernoNode },
+  ) {
+    this.fetchData(nextProps);
   }
 
   static async fetchInitialData({
-    query: { dataType: urlDataType, listingType, pageCursor, sort: urlSort },
-    site,
+    query: { listingType, dataType, sort, pageCursor, showHidden },
     headers,
-  }: InitialFetchRequest<QueryParams<HomeProps>>): Promise<HomeData> {
+  }: InitialFetchRequest<HomePathProps, HomeProps>): Promise<HomeData> {
     const client = wrapClient(
       new LemmyHttp(getHttpBaseInternal(), { headers }),
     );
-
-    const dataType = getDataTypeFromQuery(urlDataType);
-    const type_ =
-      getListingTypeFromQuery(listingType, site.my_user) ??
-      site.site_view.local_site.default_post_listing_type;
-    const sort = getSortTypeFromQuery(urlSort, site.my_user);
 
     let postsFetch: Promise<RequestState<GetPostsResponse>> =
       Promise.resolve(EMPTY_REQUEST);
@@ -331,11 +351,12 @@ export class Home extends Component<any, HomeState> {
 
     if (dataType === DataType.Post) {
       const getPostsForm: GetPosts = {
-        type_,
+        type_: listingType,
         page_cursor: pageCursor,
         limit: fetchLimit,
         sort,
         saved_only: false,
+        show_hidden: showHidden === "true",
       };
 
       postsFetch = client.getPosts(getPostsForm);
@@ -343,31 +364,19 @@ export class Home extends Component<any, HomeState> {
       const getCommentsForm: GetComments = {
         limit: fetchLimit,
         sort: postToCommentSortType(sort),
-        type_,
+        type_: listingType,
         saved_only: false,
       };
 
       commentsFetch = client.getComments(getCommentsForm);
     }
 
-    const trendingCommunitiesForm: ListCommunities = {
-      type_: "Local",
-      sort: "Hot",
-      limit: trendingFetchLimit,
-    };
-
-    const trendingCommunitiesFetch = client.listCommunities(
-      trendingCommunitiesForm,
-    );
-
-    const [postsRes, commentsRes, trendingCommunitiesRes] = await Promise.all([
+    const [postsRes, commentsRes] = await Promise.all([
       postsFetch,
       commentsFetch,
-      trendingCommunitiesFetch,
     ]);
 
     return {
-      trendingCommunitiesRes,
       commentsRes,
       postsRes,
     };
@@ -401,7 +410,9 @@ export class Home extends Component<any, HomeState> {
               {tagline && (
                 <div
                   id="tagline"
-                  dangerouslySetInnerHTML={mdToHtml(tagline)}
+                  dangerouslySetInnerHTML={mdToHtml(tagline, () =>
+                    this.forceUpdate(),
+                  )}
                 ></div>
               )}
               <div className="d-block d-md-none">{this.mobileView}</div>
@@ -428,7 +439,6 @@ export class Home extends Component<any, HomeState> {
         admins,
       },
       showSubscribedMobile,
-      showTrendingMobile,
       showSidebarMobile,
     } = this.state;
 
@@ -443,11 +453,6 @@ export class Home extends Component<any, HomeState> {
             />
           )}
           <MobileButton
-            textKey="trending"
-            show={showTrendingMobile}
-            onClick={linkEvent(this, this.handleShowTrendingMobile)}
-          />
-          <MobileButton
             textKey="sidebar"
             show={showSidebarMobile}
             onClick={linkEvent(this, this.handleShowSidebarMobile)}
@@ -460,11 +465,6 @@ export class Home extends Component<any, HomeState> {
               showLocal={showLocal(this.isoData)}
               isMobile={true}
             />
-          )}
-          {showTrendingMobile && (
-            <div className="card border-secondary mb-3">
-              {this.trendingCommunities()}
-            </div>
           )}
           {showSubscribedMobile && (
             <div className="card border-secondary mb-3">
@@ -486,9 +486,6 @@ export class Home extends Component<any, HomeState> {
 
     return (
       <div id="sidebarContainer">
-        <section id="sidebarMain" className="card border-secondary mb-3">
-          {this.trendingCommunities()}
-        </section>
         <SiteSidebar
           site={site}
           admins={admins}
@@ -507,55 +504,6 @@ export class Home extends Component<any, HomeState> {
         )}
       </div>
     );
-  }
-
-  trendingCommunities() {
-    switch (this.state.trendingCommunitiesRes?.state) {
-      case "loading":
-        return (
-          <h5>
-            <Spinner large />
-          </h5>
-        );
-      case "success": {
-        const trending = this.state.trendingCommunitiesRes.data.communities;
-        return (
-          <>
-            <header className="card-header d-flex align-items-center">
-              <h5 className="mb-0">
-                <T i18nKey="trending_communities">
-                  #
-                  <Link className="text-body" to="/communities">
-                    #
-                  </Link>
-                </T>
-              </h5>
-            </header>
-            <div className="card-body">
-              {trending.length > 0 && (
-                <ul className="list-inline">
-                  {trending.map(cv => (
-                    <li key={cv.community.id} className="list-inline-item">
-                      <CommunityLink community={cv.community} />
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {canCreateCommunity(this.state.siteRes) && (
-                <LinkButton
-                  path="/create_community"
-                  translationKey="create_a_community"
-                />
-              )}
-              <LinkButton
-                path="/communities"
-                translationKey="explore_communities"
-              />
-            </div>
-          </>
-        );
-      }
-    }
   }
 
   subscribedCommunities(isMobile = false) {
@@ -623,36 +571,23 @@ export class Home extends Component<any, HomeState> {
     );
   }
 
-  async updateUrl({
-    dataType,
-    listingType,
-    pageCursor,
-    sort,
-  }: Partial<HomeProps>) {
-    const {
-      dataType: urlDataType,
-      listingType: urlListingType,
-      sort: urlSort,
-    } = getHomeQueryParams();
-
+  async updateUrl(props: Partial<HomeProps>) {
+    const { dataType, listingType, pageCursor, sort, showHidden } = {
+      ...this.props,
+      ...props,
+    };
     const queryParams: QueryParams<HomeProps> = {
-      dataType: getDataTypeString(dataType ?? urlDataType),
-      listingType: listingType ?? urlListingType,
+      dataType: getDataTypeString(dataType ?? DataType.Post),
+      listingType: listingType,
       pageCursor: pageCursor,
-      sort: sort ?? urlSort,
+      sort: sort,
+      showHidden: showHidden,
     };
 
     this.props.history.push({
       pathname: "/",
       search: getQueryString(queryParams),
     });
-
-    if (!this.state.scrolled) {
-      this.setState({ scrolled: true });
-      setTimeout(() => window.scrollTo(0, 0), 0);
-    }
-
-    await this.fetchData();
   }
 
   get posts() {
@@ -677,7 +612,7 @@ export class Home extends Component<any, HomeState> {
   }
 
   get listings() {
-    const { dataType } = getHomeQueryParams();
+    const { dataType } = this.props;
     const siteRes = this.state.siteRes;
 
     if (dataType === DataType.Post) {
@@ -685,11 +620,7 @@ export class Home extends Component<any, HomeState> {
         case "empty":
           return <div style="min-height: 20000px;"></div>;
         case "loading":
-          return (
-            <h5>
-              <Spinner large />
-            </h5>
-          );
+          return <PostsLoadingSkeleton />;
         case "success": {
           const posts = this.state.postsRes.data.posts;
           return (
@@ -698,6 +629,7 @@ export class Home extends Component<any, HomeState> {
               showCommunity
               removeDuplicates
               enableDownvotes={enableDownvotes(siteRes)}
+              voteDisplayMode={voteDisplayMode(siteRes)}
               enableNsfw={enableNsfw(siteRes)}
               allLanguages={siteRes.all_languages}
               siteLanguages={siteRes.discussion_languages}
@@ -718,6 +650,7 @@ export class Home extends Component<any, HomeState> {
               onTransferCommunity={this.handleTransferCommunity}
               onFeaturePost={this.handleFeaturePost}
               onMarkPostAsRead={async () => {}}
+              onHidePost={this.handleHidePost}
             />
           );
         }
@@ -725,22 +658,18 @@ export class Home extends Component<any, HomeState> {
     } else {
       switch (this.state.commentsRes.state) {
         case "loading":
-          return (
-            <h5>
-              <Spinner large />
-            </h5>
-          );
+          return <CommentsLoadingSkeleton />;
         case "success": {
           const comments = this.state.commentsRes.data.comments;
           return (
             <CommentNodes
               nodes={commentsToFlatNodes(comments)}
               viewType={CommentViewType.Flat}
-              finished={this.state.finished}
               isTopLevel
               showCommunity
               showContext
               enableDownvotes={enableDownvotes(siteRes)}
+              voteDisplayMode={voteDisplayMode(siteRes)}
               allLanguages={siteRes.all_languages}
               siteLanguages={siteRes.discussion_languages}
               onSaveComment={this.handleSaveComment}
@@ -769,7 +698,7 @@ export class Home extends Component<any, HomeState> {
   }
 
   get selects() {
-    const { listingType, dataType, sort } = getHomeQueryParams();
+    const { listingType, dataType, sort, showHidden } = this.props;
 
     return (
       <div className="row align-items-center mb-3 g-3">
@@ -779,6 +708,14 @@ export class Home extends Component<any, HomeState> {
             onChange={this.handleDataTypeChange}
           />
         </div>
+        {dataType === DataType.Post && UserService.Instance.myUserInfo && (
+          <div className="col-auto">
+            <PostHiddenSelect
+              showHidden={showHidden}
+              onShowHiddenChange={this.handleShowHiddenChange}
+            />
+          </div>
+        )}
         <div className="col-auto">
           <ListingTypeSelect
             type_={
@@ -791,64 +728,64 @@ export class Home extends Component<any, HomeState> {
           />
         </div>
         <div className="col-auto">
-          <SortSelect sort={sort} onChange={this.handleSortChange} />
+          {this.props.dataType === DataType.Post ? (
+            <SortSelect sort={sort} onChange={this.handleSortChange} />
+          ) : (
+            <CommentSortSelect
+              sort={postToCommentSortType(sort)}
+              onChange={this.handleCommentSortChange}
+            />
+          )}
         </div>
         <div className="col-auto ps-0">
           {getRss(
             listingType ??
               this.state.siteRes.site_view.local_site.default_post_listing_type,
+            sort,
           )}
         </div>
       </div>
     );
   }
 
-  async fetchTrendingCommunities() {
-    this.setState({ trendingCommunitiesRes: LOADING_REQUEST });
-    this.setState({
-      trendingCommunitiesRes: await HttpService.client.listCommunities({
-        type_: "Local",
-        sort: "Hot",
-        limit: trendingFetchLimit,
-      }),
-    });
-  }
-
-  async fetchData() {
-    const { dataType, pageCursor, listingType, sort } = getHomeQueryParams();
-
+  fetchDataToken?: symbol;
+  async fetchData({
+    dataType,
+    pageCursor,
+    listingType,
+    sort,
+    showHidden,
+  }: HomeProps) {
+    const token = (this.fetchDataToken = Symbol());
     if (dataType === DataType.Post) {
-      this.setState({ postsRes: LOADING_REQUEST });
-      this.setState({
-        postsRes: await HttpService.client.getPosts({
-          page_cursor: pageCursor,
-          limit: fetchLimit,
-          sort,
-          saved_only: false,
-          type_: listingType,
-        }),
+      this.setState({ postsRes: LOADING_REQUEST, commentsRes: EMPTY_REQUEST });
+      const postsRes = await HttpService.client.getPosts({
+        page_cursor: pageCursor,
+        limit: fetchLimit,
+        sort,
+        saved_only: false,
+        type_: listingType,
+        show_hidden: showHidden === "true",
       });
+      if (token === this.fetchDataToken) {
+        this.setState({ postsRes });
+      }
     } else {
-      this.setState({ commentsRes: LOADING_REQUEST });
-      this.setState({
-        commentsRes: await HttpService.client.getComments({
-          limit: fetchLimit,
-          sort: postToCommentSortType(sort),
-          saved_only: false,
-          type_: listingType,
-        }),
+      this.setState({ commentsRes: LOADING_REQUEST, postsRes: EMPTY_REQUEST });
+      const commentsRes = await HttpService.client.getComments({
+        limit: fetchLimit,
+        sort: postToCommentSortType(sort),
+        saved_only: false,
+        type_: listingType,
       });
+      if (token === this.fetchDataToken) {
+        this.setState({ commentsRes });
+      }
     }
-
-    setupTippy();
   }
 
   handleShowSubscribedMobile(i: Home) {
     i.setState({ showSubscribedMobile: !i.state.showSubscribedMobile });
-  }
-
-  handleShowTrendingMobile(i: Home) {
-    i.setState({ showTrendingMobile: !i.state.showTrendingMobile });
   }
 
   handleShowSidebarMobile(i: Home) {
@@ -863,28 +800,35 @@ export class Home extends Component<any, HomeState> {
     this.props.history.back();
     // A hack to scroll to top
     setTimeout(() => {
-      window.scrollTo(0, 0);
+      snapToTop();
     }, 50);
   }
 
   handlePageNext(nextPage: PaginationCursor) {
-    this.setState({ scrolled: false });
     this.updateUrl({ pageCursor: nextPage });
   }
 
-  handleSortChange(val: SortType) {
-    this.setState({ scrolled: false });
+  handleSortChange(val: PostSortType) {
     this.updateUrl({ sort: val, pageCursor: undefined });
   }
 
+  handleCommentSortChange(val: CommentSortType) {
+    this.updateUrl({ sort: commentToPostSortType(val), pageCursor: undefined });
+  }
+
   handleListingTypeChange(val: ListingType) {
-    this.setState({ scrolled: false });
     this.updateUrl({ listingType: val, pageCursor: undefined });
   }
 
   handleDataTypeChange(val: DataType) {
-    this.setState({ scrolled: false });
     this.updateUrl({ dataType: val, pageCursor: undefined });
+  }
+
+  handleShowHiddenChange(show?: StringBoolean) {
+    this.updateUrl({
+      showHidden: show,
+      pageCursor: undefined,
+    });
   }
 
   async handleAddModToCommunity(form: AddModToCommunity) {
@@ -918,6 +862,9 @@ export class Home extends Component<any, HomeState> {
     const createCommentRes = await HttpService.client.createComment(form);
     this.createAndUpdateComments(createCommentRes);
 
+    if (createCommentRes.state === "failed") {
+      toast(I18NextService.i18n.t(createCommentRes.err.message), "danger");
+    }
     return createCommentRes;
   }
 
@@ -925,6 +872,9 @@ export class Home extends Component<any, HomeState> {
     const editCommentRes = await HttpService.client.editComment(form);
     this.findAndUpdateCommentEdit(editCommentRes);
 
+    if (editCommentRes.state === "failed") {
+      toast(I18NextService.i18n.t(editCommentRes.err.message), "danger");
+    }
     return editCommentRes;
   }
 
@@ -1037,6 +987,26 @@ export class Home extends Component<any, HomeState> {
     this.updateBan(banRes);
   }
 
+  async handleHidePost(form: HidePost) {
+    const hideRes = await HttpService.client.hidePost(form);
+
+    if (hideRes.state === "success") {
+      this.setState(prev => {
+        if (prev.postsRes.state === "success") {
+          for (const post of prev.postsRes.data.posts.filter(p =>
+            form.post_ids.some(id => id === p.post.id),
+          )) {
+            post.hidden = form.hide;
+          }
+        }
+
+        return prev;
+      });
+
+      toast(I18NextService.i18n.t(form.hide ? "post_hidden" : "post_unhidden"));
+    }
+  }
+
   updateBanFromCommunity(banRes: RequestState<BanFromCommunityResponse>) {
     // Maybe not necessary
     if (banRes.state === "success") {
@@ -1093,7 +1063,6 @@ export class Home extends Component<any, HomeState> {
           res.data.comment_view,
           s.commentsRes.data.comments,
         );
-        s.finished.set(res.data.comment_view.comment.id, true);
       }
       return s;
     });
@@ -1115,12 +1084,6 @@ export class Home extends Component<any, HomeState> {
     this.setState(s => {
       if (s.commentsRes.state === "success" && res.state === "success") {
         s.commentsRes.data.comments.unshift(res.data.comment_view);
-
-        // Set finished for the parent
-        s.finished.set(
-          getCommentParentId(res.data.comment_view.comment) ?? 0,
-          true,
-        );
       }
       return s;
     });

@@ -1,4 +1,4 @@
-FROM node:21-alpine as builder
+FROM node:alpine as builder
 
 # Added vips-dev and pkgconfig so that local vips is used instead of prebuilt
 # Done for two reasons:
@@ -6,8 +6,11 @@ FROM node:21-alpine as builder
 # - It can break depending on the CPU (https://github.com/LemmyNet/lemmy-ui/issues/1566)
 RUN apk update && apk upgrade && apk add --no-cache curl python3 build-base gcc wget git vips-dev pkgconfig
 
-# Install node-gyp and pnpm
-RUN npm install -g pnpm node-gyp
+# Install node-gyp and corepack
+RUN npm install -g node-gyp corepack
+
+# Enable corepack to use pnpm
+RUN corepack enable
 
 WORKDIR /usr/src/app
 
@@ -30,6 +33,7 @@ COPY .git .git
 
 # Set UI version 
 RUN echo "export const VERSION = '$(git describe --tag)';" > "src/shared/version.ts"
+RUN echo "export const BUILD_DATE_ISO8601 = '$(date -u +"%Y-%m-%dT%H:%M:%SZ")';" > "src/shared/build-date.ts"
 
 RUN pnpm i
 RUN pnpm prebuild:prod
@@ -39,7 +43,7 @@ RUN rm -rf ./node_modules/import-sort-parser-typescript
 RUN rm -rf ./node_modules/typescript
 RUN rm -rf ./node_modules/npm
 
-FROM node:21-alpine as runner
+FROM node:alpine as runner
 ENV NODE_ENV=production
 
 RUN apk update && apk add --no-cache curl vips-cpp && rm -rf /var/cache/apk/*

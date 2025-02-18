@@ -12,7 +12,9 @@ import {
   DeletePost,
   EditPost,
   FeaturePost,
+  HidePost,
   Language,
+  LocalUserVoteDisplayMode,
   LockPost,
   MarkPostAsRead,
   PostResponse,
@@ -34,6 +36,7 @@ interface PostListingsProps {
   showCommunity?: boolean;
   removeDuplicates?: boolean;
   enableDownvotes?: boolean;
+  voteDisplayMode: LocalUserVoteDisplayMode;
   enableNsfw?: boolean;
   viewOnly?: boolean;
   onPostEdit(form: EditPost): Promise<RequestState<PostResponse>>;
@@ -53,6 +56,7 @@ interface PostListingsProps {
   onAddAdmin(form: AddAdmin): Promise<void>;
   onTransferCommunity(form: TransferCommunity): Promise<void>;
   onMarkPostAsRead(form: MarkPostAsRead): Promise<void>;
+  onHidePost(form: HidePost): Promise<void>;
 }
 
 export class PostListings extends Component<PostListingsProps, any> {
@@ -79,6 +83,7 @@ export class PostListings extends Component<PostListingsProps, any> {
                 crossPosts={this.duplicatesMap.get(post_view.post.id)}
                 showCommunity={this.props.showCommunity}
                 enableDownvotes={this.props.enableDownvotes}
+                voteDisplayMode={this.props.voteDisplayMode}
                 enableNsfw={this.props.enableNsfw}
                 viewOnly={this.props.viewOnly}
                 allLanguages={this.props.allLanguages}
@@ -100,6 +105,7 @@ export class PostListings extends Component<PostListingsProps, any> {
                 onAddAdmin={this.props.onAddAdmin}
                 onTransferCommunity={this.props.onTransferCommunity}
                 onMarkPostAsRead={this.props.onMarkPostAsRead}
+                onHidePost={this.props.onHidePost}
               />
               {idx + 1 !== this.posts.length && <hr className="my-3" />}
             </>

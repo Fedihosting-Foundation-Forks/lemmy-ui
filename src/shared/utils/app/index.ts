@@ -1,11 +1,11 @@
 import buildCommentsTree from "./build-comments-tree";
 import { colorList } from "./color-list";
+import commentToPostSortType from "./comment-to-post-sort-type";
 import commentsToFlatNodes from "./comments-to-flat-nodes";
 import communityRSSUrl from "./community-rss-url";
 import communitySearch from "./community-search";
 import communitySelectName from "./community-select-name";
 import communityToChoice from "./community-to-choice";
-import convertCommentSortType from "./convert-comment-sort-type";
 import editComment from "./edit-comment";
 import editCommentReply from "./edit-comment-reply";
 import editCommentReport from "./edit-comment-report";
@@ -18,6 +18,8 @@ import editPrivateMessageReport from "./edit-private-message-report";
 import editRegistrationApplication from "./edit-registration-application";
 import editWith from "./edit-with";
 import enableDownvotes from "./enable-downvotes";
+import voteDisplayMode from "./vote-display-mode";
+import calculateUpvotePct from "./calculate-upvote-pct";
 import enableNsfw from "./enable-nsfw";
 import fetchCommunities from "./fetch-communities";
 import fetchSearchResults from "./fetch-search-results";
@@ -29,7 +31,6 @@ import getDataTypeString from "./get-data-type-string";
 import getDepthFromComment from "./get-depth-from-comment";
 import getIdFromProps from "./get-id-from-props";
 import getRecipientIdFromProps from "./get-recipient-id-from-props";
-import getUpdatedSearchId from "./get-updated-search-id";
 import initializeSite from "./initialize-site";
 import insertCommentIntoTree from "./insert-comment-into-tree";
 import isAuthPath from "./is-auth-path";
@@ -44,7 +45,6 @@ import postToCommentSortType from "./post-to-comment-sort-type";
 import searchCommentTree from "./search-comment-tree";
 import selectableLanguages from "./selectable-languages";
 import setIsoData from "./set-iso-data";
-import setTheme from "./set-theme";
 import setupDateFns from "./setup-date-fns";
 import showAvatars from "./show-avatars";
 import showLocal from "./show-local";
@@ -59,12 +59,12 @@ import isAnonymousPath from "./is-anonymous-path";
 export {
   buildCommentsTree,
   colorList,
+  commentToPostSortType,
   commentsToFlatNodes,
   communityRSSUrl,
   communitySearch,
   communitySelectName,
   communityToChoice,
-  convertCommentSortType,
   editComment,
   editCommentReply,
   editCommentReport,
@@ -88,7 +88,6 @@ export {
   getDepthFromComment,
   getIdFromProps,
   getRecipientIdFromProps,
-  getUpdatedSearchId,
   initializeSite,
   insertCommentIntoTree,
   isAuthPath,
@@ -103,7 +102,6 @@ export {
   searchCommentTree,
   selectableLanguages,
   setIsoData,
-  setTheme,
   setupDateFns,
   showAvatars,
   showLocal,
@@ -114,4 +112,6 @@ export {
   instanceToChoice,
   updateInstanceBlock,
   isAnonymousPath,
+  voteDisplayMode,
+  calculateUpvotePct,
 };

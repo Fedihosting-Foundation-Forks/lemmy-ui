@@ -11,13 +11,20 @@ import {
 import { toast } from "../../toast";
 import { HtmlTags } from "../common/html-tags";
 import { Spinner } from "../common/icon";
+import { simpleScrollMixin } from "../mixins/scroll-mixin";
+import { RouteComponentProps } from "inferno-router/dist/Route";
+import { isBrowser } from "@utils/browser";
 
 interface State {
   verifyRes: RequestState<SuccessResponse>;
   siteRes: GetSiteResponse;
 }
 
-export class VerifyEmail extends Component<any, State> {
+@simpleScrollMixin
+export class VerifyEmail extends Component<
+  RouteComponentProps<Record<string, never>>,
+  State
+> {
   private isoData = setIsoData(this.context);
 
   state: State = {
@@ -46,8 +53,10 @@ export class VerifyEmail extends Component<any, State> {
     }
   }
 
-  async componentDidMount() {
-    await this.verify();
+  async componentWillMount() {
+    if (isBrowser()) {
+      await this.verify();
+    }
   }
 
   get documentTitle(): string {

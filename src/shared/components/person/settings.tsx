@@ -1,5 +1,6 @@
 import {
   communityToChoice,
+  enableDownvotes,
   fetchCommunities,
   fetchThemeList,
   fetchUsers,
@@ -7,7 +8,6 @@ import {
   myAuth,
   personToChoice,
   setIsoData,
-  setTheme,
   showLocal,
   updateCommunityBlock,
   updateInstanceBlock,
@@ -22,17 +22,17 @@ import {
   BlockCommunityResponse,
   BlockInstanceResponse,
   BlockPersonResponse,
-  CommunityBlockView,
+  CommentSortType,
+  Community,
   GenerateTotpSecretResponse,
   GetFederatedInstancesResponse,
   GetSiteResponse,
   Instance,
-  InstanceBlockView,
   LemmyHttp,
   ListingType,
   LoginResponse,
-  PersonBlockView,
-  SortType,
+  Person,
+  PostSortType,
   SuccessResponse,
   UpdateTotpResponse,
 } from "lemmy-js-client";
@@ -45,8 +45,12 @@ import {
   RequestState,
   wrapClient,
 } from "../../services/HttpService";
-import { I18NextService, languages } from "../../services/I18NextService";
-import { setupTippy } from "../../tippy";
+import {
+  I18NextService,
+  languages,
+  loadUserLanguage,
+} from "../../services/I18NextService";
+import { tippyMixin } from "../mixins/tippy-mixin";
 import { toast } from "../../toast";
 import { HtmlTags } from "../common/html-tags";
 import { Icon, Spinner } from "../common/icon";
@@ -61,10 +65,19 @@ import Tabs from "../common/tabs";
 import { CommunityLink } from "../community/community-link";
 import { PersonListing } from "./person-listing";
 import { InitialFetchRequest } from "../../interfaces";
-import TotpModal from "../common/totp-modal";
+import TotpModal from "../common/modal/totp-modal";
 import { LoadingEllipses } from "../common/loading-ellipses";
-import { updateDataBsTheme } from "../../utils/browser";
+import {
+  isBrowser,
+  refreshTheme,
+  setThemeOverride,
+  snapToTop,
+} from "../../utils/browser";
 import { getHttpBaseInternal } from "../../utils/env";
+import { IRoutePropsWithFetch } from "../../routes";
+import { RouteComponentProps } from "inferno-router/dist/Route";
+import { simpleScrollMixin } from "../mixins/scroll-mixin";
+import { CommentSortSelect } from "../common/comment-sort-select";
 
 type SettingsData = RouteDataResponse<{
   instancesRes: GetFederatedInstancesResponse;
@@ -83,7 +96,8 @@ interface SettingsState {
     blur_nsfw?: boolean;
     auto_expand?: boolean;
     theme?: string;
-    default_sort_type?: SortType;
+    default_post_sort_type?: PostSortType;
+    default_comment_sort_type?: CommentSortType;
     default_listing_type?: ListingType;
     interface_language?: string;
     avatar?: string;
@@ -94,11 +108,13 @@ interface SettingsState {
     matrix_user_id?: string;
     show_avatars?: boolean;
     show_scores?: boolean;
+    show_upvotes?: boolean;
+    show_downvotes?: boolean;
+    show_upvote_percentage?: boolean;
     send_notifications_to_email?: boolean;
     bot_account?: boolean;
     show_bot_accounts?: boolean;
     show_read_posts?: boolean;
-    show_new_post_notifs?: boolean;
     discussion_languages?: number[];
     open_links_in_new_tab?: boolean;
   };
@@ -108,11 +124,12 @@ interface SettingsState {
     old_password?: string;
   };
   deleteAccountForm: {
+    delete_content?: boolean;
     password?: string;
   };
-  personBlocks: PersonBlockView[];
-  communityBlocks: CommunityBlockView[];
-  instanceBlocks: InstanceBlockView[];
+  personBlocks: Person[];
+  communityBlocks: Community[];
+  instanceBlocks: Instance[];
   currentTab: string;
   themeList: string[];
   deleteAccountShowConfirm: boolean;
@@ -189,7 +206,17 @@ function handleClose2faModal(i: Settings) {
   i.setState({ show2faModal: false });
 }
 
-export class Settings extends Component<any, SettingsState> {
+type SettingsRouteProps = RouteComponentProps<Record<string, never>> &
+  Record<string, never>;
+export type SettingsFetchConfig = IRoutePropsWithFetch<
+  SettingsData,
+  Record<string, never>,
+  Record<string, never>
+>;
+
+@simpleScrollMixin
+@tippyMixin
+export class Settings extends Component<SettingsRouteProps, SettingsState> {
   private isoData = setIsoData<SettingsData>(this.context);
   exportSettingsLink = createRef<HTMLAnchorElement>();
 
@@ -224,7 +251,9 @@ export class Settings extends Component<any, SettingsState> {
   constructor(props: any, context: any) {
     super(props, context);
 
-    this.handleSortTypeChange = this.handleSortTypeChange.bind(this);
+    this.handlePostSortTypeChange = this.handlePostSortTypeChange.bind(this);
+    this.handleCommentSortTypeChange =
+      this.handleCommentSortTypeChange.bind(this);
     this.handleListingTypeChange = this.handleListingTypeChange.bind(this);
     this.handleBioChange = this.handleBioChange.bind(this);
     this.handleDiscussionLanguageChange =
@@ -252,14 +281,13 @@ export class Settings extends Component<any, SettingsState> {
         local_user: {
           show_nsfw,
           blur_nsfw,
-          auto_expand,
           theme,
-          default_sort_type,
+          default_post_sort_type,
+          default_comment_sort_type,
           default_listing_type,
           interface_language,
           show_avatars,
           show_bot_accounts,
-          show_scores,
           show_read_posts,
           send_notifications_to_email,
           email,
@@ -273,6 +301,12 @@ export class Settings extends Component<any, SettingsState> {
           bio,
           matrix_user_id,
         },
+        local_user_vote_display_mode: {
+          score: show_scores,
+          upvotes: show_upvotes,
+          downvotes: show_downvotes,
+          upvote_percentage: show_upvote_percentage,
+        },
       } = mui.local_user_view;
 
       this.state = {
@@ -284,9 +318,9 @@ export class Settings extends Component<any, SettingsState> {
           ...this.state.saveUserSettingsForm,
           show_nsfw,
           blur_nsfw,
-          auto_expand,
           theme: theme ?? "browser",
-          default_sort_type,
+          default_post_sort_type,
+          default_comment_sort_type,
           default_listing_type,
           interface_language,
           discussion_languages: mui.discussion_languages,
@@ -297,6 +331,9 @@ export class Settings extends Component<any, SettingsState> {
           bot_account,
           show_bot_accounts,
           show_scores,
+          show_upvotes,
+          show_downvotes,
+          show_upvote_percentage,
           show_read_posts,
           email,
           bio,
@@ -319,19 +356,26 @@ export class Settings extends Component<any, SettingsState> {
     }
   }
 
-  async componentDidMount() {
-    setupTippy();
-    this.setState({ themeList: await fetchThemeList() });
+  async componentWillMount() {
+    if (isBrowser()) {
+      this.setState({ themeList: await fetchThemeList() });
 
-    if (!this.state.isIsomorphic) {
-      this.setState({
-        instancesRes: LOADING_REQUEST,
-      });
+      if (!this.state.isIsomorphic) {
+        this.setState({
+          instancesRes: LOADING_REQUEST,
+        });
 
-      this.setState({
-        instancesRes: await HttpService.client.getFederatedInstances(),
-      });
+        this.setState({
+          instancesRes: await HttpService.client.getFederatedInstances(),
+        });
+      }
     }
+  }
+
+  componentWillUnmount(): void {
+    // In case `interface_language` change wasn't saved.
+    loadUserLanguage();
+    setThemeOverride(undefined);
   }
 
   static async fetchInitialData({
@@ -407,7 +451,13 @@ export class Settings extends Component<any, SettingsState> {
               <div className="card-body">{this.changePasswordHtmlForm()}</div>
             </div>
             <div className="card border-secondary mb-3">
-              <div className="card-body">{this.importExport()}</div>
+              <div className="card-body">{this.totpSection()}</div>
+            </div>
+            <div className="card border-secondary mb-3">
+              <div className="card-body">{this.importExportForm()}</div>
+            </div>
+            <div className="card border-secondary mb-3">
+              <div className="card-body">{this.deleteAccountForm()}</div>
             </div>
           </div>
         </div>
@@ -475,13 +525,11 @@ export class Settings extends Component<any, SettingsState> {
               value={this.state.changePasswordForm.old_password}
               onInput={linkEvent(this, this.handleOldPasswordChange)}
               label={I18NextService.i18n.t("old_password")}
+              required={false}
             />
           </div>
           <div className="input-group mb-3">
-            <button
-              type="submit"
-              className="btn d-block btn-secondary me-4 w-100"
-            >
+            <button type="submit" className="btn btn-secondary">
               {this.state.changePasswordRes.state === "loading" ? (
                 <Spinner />
               ) : (
@@ -516,14 +564,14 @@ export class Settings extends Component<any, SettingsState> {
       <>
         <h2 className="h5">{I18NextService.i18n.t("blocked_users")}</h2>
         <ul className="list-unstyled mb-0">
-          {this.state.personBlocks.map(pb => (
-            <li key={pb.target.id}>
+          {this.state.personBlocks.map(p => (
+            <li key={p.id}>
               <span>
-                <PersonListing person={pb.target} />
+                <PersonListing person={p} />
                 <button
                   className="btn btn-sm"
                   onClick={linkEvent(
-                    { ctx: this, recipientId: pb.target.id },
+                    { ctx: this, recipientId: p.id },
                     this.handleUnblockPerson,
                   )}
                   data-tippy-content={I18NextService.i18n.t("unblock_user")}
@@ -560,14 +608,14 @@ export class Settings extends Component<any, SettingsState> {
       <>
         <h2 className="h5">{I18NextService.i18n.t("blocked_communities")}</h2>
         <ul className="list-unstyled mb-0">
-          {this.state.communityBlocks.map(cb => (
-            <li key={cb.community.id}>
+          {this.state.communityBlocks.map(c => (
+            <li key={c.id}>
               <span>
-                <CommunityLink community={cb.community} />
+                <CommunityLink community={c} />
                 <button
                   className="btn btn-sm"
                   onClick={linkEvent(
-                    { ctx: this, communityId: cb.community.id },
+                    { ctx: this, communityId: c.id },
                     this.handleUnblockCommunity,
                   )}
                   data-tippy-content={I18NextService.i18n.t(
@@ -605,14 +653,14 @@ export class Settings extends Component<any, SettingsState> {
       <>
         <h2 className="h5">{I18NextService.i18n.t("blocked_instances")}</h2>
         <ul className="list-unstyled mb-0">
-          {this.state.instanceBlocks.map(ib => (
-            <li key={ib.instance.id}>
+          {this.state.instanceBlocks.map(i => (
+            <li key={i.id}>
               <span>
-                {ib.instance.domain}
+                {i.domain}
                 <button
                   className="btn btn-sm"
                   onClick={linkEvent(
-                    { ctx: this, instanceId: ib.instance.id },
+                    { ctx: this, instanceId: i.id },
                     this.handleUnblockInstance,
                   )}
                   data-tippy-content={I18NextService.i18n.t("unblock_instance")}
@@ -627,7 +675,7 @@ export class Settings extends Component<any, SettingsState> {
     );
   }
 
-  importExport() {
+  importExportForm() {
     return (
       <>
         <h2 className="h5">
@@ -640,7 +688,7 @@ export class Settings extends Component<any, SettingsState> {
         ) ? (
           <>
             <button
-              className="btn btn-secondary w-100 mb-4"
+              className="btn btn-secondary mb-4"
               onClick={linkEvent(this, this.handleExportSettings)}
               type="button"
             >
@@ -655,7 +703,7 @@ export class Settings extends Component<any, SettingsState> {
                 onChange={linkEvent(this, this.handleImportFileChange)}
               />
               <button
-                className="btn btn-secondary w-100 mt-3"
+                className="btn btn-secondary mt-3"
                 onClick={linkEvent(this, this.handleImportSettings)}
                 type="button"
                 disabled={!this.state.settingsFile}
@@ -681,6 +729,7 @@ export class Settings extends Component<any, SettingsState> {
 
   saveUserSettingsHtmlForm() {
     const selectedLangs = this.state.saveUserSettingsForm.discussion_languages;
+    const siteRes = this.state.siteRes;
 
     return (
       <>
@@ -713,8 +762,8 @@ export class Settings extends Component<any, SettingsState> {
                 onContentChange={this.handleBioChange}
                 maxLength={300}
                 hideNavigationWarnings
-                allLanguages={this.state.siteRes.all_languages}
-                siteLanguages={this.state.siteRes.discussion_languages}
+                allLanguages={siteRes.all_languages}
+                siteLanguages={siteRes.discussion_languages}
               />
             </div>
           </div>
@@ -790,7 +839,7 @@ export class Settings extends Component<any, SettingsState> {
                 onChange={linkEvent(this, this.handleInterfaceLangChange)}
                 className="form-select d-inline-block w-auto"
               >
-                <option disabled aria-hidden="true">
+                <option disabled aria-hidden="true" selected>
                   {I18NextService.i18n.t("interface_language")}
                 </option>
                 <option value="browser">
@@ -810,8 +859,8 @@ export class Settings extends Component<any, SettingsState> {
             </div>
           </div>
           <LanguageSelect
-            allLanguages={this.state.siteRes.all_languages}
-            siteLanguages={this.state.siteRes.discussion_languages}
+            allLanguages={siteRes.all_languages}
+            siteLanguages={siteRes.discussion_languages}
             selectedLanguageIds={selectedLangs}
             multiple={true}
             showLanguageWarning={true}
@@ -865,14 +914,29 @@ export class Settings extends Component<any, SettingsState> {
           </form>
           <form className="mb-3 row">
             <label className="col-sm-3 col-form-label">
-              {I18NextService.i18n.t("sort_type")}
+              {I18NextService.i18n.t("post_sort_type")}
             </label>
             <div className="col-sm-9">
               <SortSelect
                 sort={
-                  this.state.saveUserSettingsForm.default_sort_type ?? "Active"
+                  this.state.saveUserSettingsForm.default_post_sort_type ??
+                  "Active"
                 }
-                onChange={this.handleSortTypeChange}
+                onChange={this.handlePostSortTypeChange}
+              />
+            </div>
+          </form>
+          <form className="mb-3 row">
+            <label className="col-sm-3 col-form-label">
+              {I18NextService.i18n.t("comment_sort_type")}
+            </label>
+            <div className="col-sm-9">
+              <CommentSortSelect
+                sort={
+                  this.state.saveUserSettingsForm.default_comment_sort_type ??
+                  "Hot"
+                }
+                onChange={this.handleCommentSortTypeChange}
               />
             </div>
           </form>
@@ -896,7 +960,11 @@ export class Settings extends Component<any, SettingsState> {
                 className="form-check-input"
                 id="user-blur-nsfw"
                 type="checkbox"
-                checked={this.state.saveUserSettingsForm.blur_nsfw}
+                disabled={!this.state.saveUserSettingsForm.show_nsfw}
+                checked={
+                  this.state.saveUserSettingsForm.blur_nsfw &&
+                  this.state.saveUserSettingsForm.show_nsfw
+                }
                 onChange={linkEvent(this, this.handleBlurNsfwChange)}
               />
               <label className="form-check-label" htmlFor="user-blur-nsfw">
@@ -929,6 +997,59 @@ export class Settings extends Component<any, SettingsState> {
               />
               <label className="form-check-label" htmlFor="user-show-scores">
                 {I18NextService.i18n.t("show_scores")}
+              </label>
+            </div>
+          </div>
+          <div className="input-group mb-3">
+            <div className="form-check">
+              <input
+                className="form-check-input"
+                id="user-show-upvotes"
+                type="checkbox"
+                checked={this.state.saveUserSettingsForm.show_upvotes}
+                onChange={linkEvent(this, this.handleShowUpvotesChange)}
+              />
+              <label className="form-check-label" htmlFor="user-show-upvotes">
+                {I18NextService.i18n.t("show_upvotes")}
+              </label>
+            </div>
+          </div>
+          {enableDownvotes(siteRes) && (
+            <div className="input-group mb-3">
+              <div className="form-check">
+                <input
+                  className="form-check-input"
+                  id="user-show-downvotes"
+                  type="checkbox"
+                  checked={this.state.saveUserSettingsForm.show_downvotes}
+                  onChange={linkEvent(this, this.handleShowDownvotesChange)}
+                />
+                <label
+                  className="form-check-label"
+                  htmlFor="user-show-downvotes"
+                >
+                  {I18NextService.i18n.t("show_downvotes")}
+                </label>
+              </div>
+            </div>
+          )}
+          <div className="input-group mb-3">
+            <div className="form-check">
+              <input
+                className="form-check-input"
+                id="user-show-upvote-percentage"
+                type="checkbox"
+                checked={this.state.saveUserSettingsForm.show_upvote_percentage}
+                onChange={linkEvent(
+                  this,
+                  this.handleShowUpvotePercentageChange,
+                )}
+              />
+              <label
+                className="form-check-label"
+                htmlFor="user-show-upvote-percentage"
+              >
+                {I18NextService.i18n.t("show_upvote_percentage")}
               </label>
             </div>
           </div>
@@ -998,23 +1119,6 @@ export class Settings extends Component<any, SettingsState> {
             <div className="form-check">
               <input
                 className="form-check-input"
-                id="user-show-new-post-notifs"
-                type="checkbox"
-                checked={this.state.saveUserSettingsForm.show_new_post_notifs}
-                onChange={linkEvent(this, this.handleShowNewPostNotifs)}
-              />
-              <label
-                className="form-check-label"
-                htmlFor="user-show-new-post-notifs"
-              >
-                {I18NextService.i18n.t("show_new_post_notifs")}
-              </label>
-            </div>
-          </div>
-          <div className="input-group mb-3">
-            <div className="form-check">
-              <input
-                className="form-check-input"
                 id="user-send-notifications-to-email"
                 type="checkbox"
                 disabled={!this.state.saveUserSettingsForm.email}
@@ -1051,7 +1155,6 @@ export class Settings extends Component<any, SettingsState> {
               </label>
             </div>
           </div>
-          {this.totpSection()}
           <div className="input-group mb-3">
             <button type="submit" className="btn d-block btn-secondary me-4">
               {this.state.saveRes.state === "loading" ? (
@@ -1061,63 +1164,86 @@ export class Settings extends Component<any, SettingsState> {
               )}
             </button>
           </div>
-          <hr />
-          <form
-            className="mb-3"
-            onSubmit={linkEvent(this, this.handleDeleteAccount)}
+        </form>
+      </>
+    );
+  }
+
+  deleteAccountForm() {
+    return (
+      <>
+        <h2 className="h5">{I18NextService.i18n.t("delete_account")}</h2>
+        <form
+          className="mb-3"
+          onSubmit={linkEvent(this, this.handleDeleteAccount)}
+        >
+          <button
+            type="button"
+            className="btn d-block btn-danger"
+            onClick={linkEvent(this, this.handleDeleteAccountShowConfirmToggle)}
           >
-            <button
-              type="button"
-              className="btn d-block btn-danger"
-              onClick={linkEvent(
-                this,
-                this.handleDeleteAccountShowConfirmToggle,
-              )}
-            >
-              {I18NextService.i18n.t("delete_account")}
-            </button>
-            {this.state.deleteAccountShowConfirm && (
-              <>
-                <label
-                  className="my-2 alert alert-danger d-block"
-                  role="alert"
-                  htmlFor="password-delete-account"
-                >
-                  {I18NextService.i18n.t("delete_account_confirm")}
-                </label>
-                <PasswordInput
-                  id="password-delete-account"
-                  value={this.state.deleteAccountForm.password}
-                  onInput={linkEvent(
-                    this,
-                    this.handleDeleteAccountPasswordChange,
-                  )}
-                  className="my-2"
-                />
-                <button
-                  type="submit"
-                  className="btn btn-danger me-4"
-                  disabled={!this.state.deleteAccountForm.password}
-                >
-                  {this.state.deleteAccountRes.state === "loading" ? (
-                    <Spinner />
-                  ) : (
-                    capitalizeFirstLetter(I18NextService.i18n.t("delete"))
-                  )}
-                </button>
-                <button
-                  className="btn btn-secondary"
-                  type="button"
-                  onClick={linkEvent(
-                    this,
-                    this.handleDeleteAccountShowConfirmToggle,
-                  )}
-                >
-                  {I18NextService.i18n.t("cancel")}
-                </button>
-              </>
-            )}
-          </form>
+            {I18NextService.i18n.t("delete_account")}
+          </button>
+          {this.state.deleteAccountShowConfirm && (
+            <>
+              <label
+                className="my-2 alert alert-danger d-block"
+                role="alert"
+                htmlFor="password-delete-account"
+              >
+                {I18NextService.i18n.t("delete_account_confirm")}
+              </label>
+              <PasswordInput
+                id="password-delete-account"
+                value={this.state.deleteAccountForm.password}
+                onInput={linkEvent(
+                  this,
+                  this.handleDeleteAccountPasswordChange,
+                )}
+                className="my-2"
+              />
+              <div className="input-group mb-3">
+                <div className="form-check">
+                  <input
+                    id="delete-account-content"
+                    type="checkbox"
+                    className="form-check-input"
+                    onInput={linkEvent(
+                      this,
+                      this.handleDeleteAccountContentChange,
+                    )}
+                  />
+                  <label
+                    className="form-check-label"
+                    htmlFor="delete-account-content"
+                  >
+                    {I18NextService.i18n.t("delete_account_content")}
+                  </label>
+                </div>
+              </div>
+              <button
+                type="submit"
+                className="btn btn-danger me-4"
+                disabled={!this.state.deleteAccountForm.password}
+              >
+                {this.state.deleteAccountRes.state === "loading" ? (
+                  <Spinner />
+                ) : (
+                  capitalizeFirstLetter(I18NextService.i18n.t("delete"))
+                )}
+              </button>
+              <button
+                className="btn btn-secondary"
+                type="button"
+                onClick={linkEvent(
+                  this,
+                  this.handleDeleteAccountShowConfirmToggle,
+                )}
+              >
+                {I18NextService.i18n.t("cancel")}
+              </button>
+            </>
+          )}
         </form>
       </>
     );
@@ -1128,9 +1254,11 @@ export class Settings extends Component<any, SettingsState> {
       !!UserService.Instance.myUserInfo?.local_user_view.local_user
         .totp_2fa_enabled;
     const { generateTotpRes } = this.state;
+    const totpActionStr = totpEnabled ? "disable_totp" : "enable_totp";
 
     return (
       <>
+        <h2 className="h5">{I18NextService.i18n.t(totpActionStr)}</h2>
         <button
           type="button"
           className="btn btn-secondary my-2"
@@ -1139,7 +1267,7 @@ export class Settings extends Component<any, SettingsState> {
             totpEnabled ? handleShowTotpModal : handleGenerateTotp,
           )}
         >
-          {I18NextService.i18n.t(totpEnabled ? "disable_totp" : "enable_totp")}
+          {I18NextService.i18n.t(totpActionStr)}
         </button>
         {totpEnabled ? (
           <TotpModal
@@ -1249,7 +1377,7 @@ export class Settings extends Component<any, SettingsState> {
           instance =>
             instance.domain.toLowerCase().includes(text.toLowerCase()) &&
             !this.state.instanceBlocks.some(
-              blockedInstance => blockedInstance.instance.id === instance.id,
+              blockedInstance => blockedInstance.id === instance.id,
             ),
         ) ?? [];
     }
@@ -1378,14 +1506,6 @@ export class Settings extends Component<any, SettingsState> {
     );
   }
 
-  handleShowNewPostNotifs(i: Settings, event: any) {
-    i.setState(
-      s => (
-        (s.saveUserSettingsForm.show_new_post_notifs = event.target.checked), s
-      ),
-    );
-  }
-
   handleOpenInNewTab(i: Settings, event: any) {
     i.setState(
       s => (
@@ -1397,10 +1517,47 @@ export class Settings extends Component<any, SettingsState> {
   handleShowScoresChange(i: Settings, event: any) {
     const mui = UserService.Instance.myUserInfo;
     if (mui) {
-      mui.local_user_view.local_user.show_scores = event.target.checked;
+      mui.local_user_view.local_user_vote_display_mode.score =
+        event.target.checked;
     }
     i.setState(
       s => ((s.saveUserSettingsForm.show_scores = event.target.checked), s),
+    );
+  }
+
+  handleShowUpvotesChange(i: Settings, event: any) {
+    const mui = UserService.Instance.myUserInfo;
+    if (mui) {
+      mui.local_user_view.local_user_vote_display_mode.upvotes =
+        event.target.checked;
+    }
+    i.setState(
+      s => ((s.saveUserSettingsForm.show_upvotes = event.target.checked), s),
+    );
+  }
+
+  handleShowDownvotesChange(i: Settings, event: any) {
+    const mui = UserService.Instance.myUserInfo;
+    if (mui) {
+      mui.local_user_view.local_user_vote_display_mode.downvotes =
+        event.target.checked;
+    }
+    i.setState(
+      s => ((s.saveUserSettingsForm.show_downvotes = event.target.checked), s),
+    );
+  }
+
+  handleShowUpvotePercentageChange(i: Settings, event: any) {
+    const mui = UserService.Instance.myUserInfo;
+    if (mui) {
+      mui.local_user_view.local_user_vote_display_mode.upvote_percentage =
+        event.target.checked;
+    }
+    i.setState(
+      s => (
+        (s.saveUserSettingsForm.show_upvote_percentage = event.target.checked),
+        s
+      ),
     );
   }
 
@@ -1424,13 +1581,19 @@ export class Settings extends Component<any, SettingsState> {
 
   handleThemeChange(i: Settings, event: any) {
     i.setState(s => ((s.saveUserSettingsForm.theme = event.target.value), s));
-    setTheme(event.target.value, true);
+    setThemeOverride(event.target.value);
   }
 
   handleInterfaceLangChange(i: Settings, event: any) {
     const newLang = event.target.value ?? "browser";
     I18NextService.i18n.changeLanguage(
       newLang === "browser" ? navigator.languages : newLang,
+      () => {
+        // Now the language is loaded, can be synchronous. Let the state update first.
+        window.requestAnimationFrame(() => {
+          i.forceUpdate();
+        });
+      },
     );
 
     i.setState(
@@ -1446,8 +1609,16 @@ export class Settings extends Component<any, SettingsState> {
     );
   }
 
-  handleSortTypeChange(val: SortType) {
-    this.setState(s => ((s.saveUserSettingsForm.default_sort_type = val), s));
+  handlePostSortTypeChange(val: PostSortType) {
+    this.setState(
+      s => ((s.saveUserSettingsForm.default_post_sort_type = val), s),
+    );
+  }
+
+  handleCommentSortTypeChange(val: CommentSortType) {
+    this.setState(
+      s => ((s.saveUserSettingsForm.default_comment_sort_type = val), s),
+    );
   }
 
   handleListingTypeChange(val: ListingType) {
@@ -1529,12 +1700,16 @@ export class Settings extends Component<any, SettingsState> {
         });
 
         UserService.Instance.myUserInfo = siteRes.data.my_user;
+        loadUserLanguage();
       }
 
       toast(I18NextService.i18n.t("saved"));
-      window.scrollTo(0, 0);
+
+      // You need to reload the page, to properly update the siteRes everywhere
+      setTimeout(() => location.reload(), 500);
     }
 
+    setThemeOverride(undefined);
     i.setState({ saveRes });
   }
 
@@ -1543,15 +1718,15 @@ export class Settings extends Component<any, SettingsState> {
     const { new_password, new_password_verify, old_password } =
       i.state.changePasswordForm;
 
-    if (new_password && old_password && new_password_verify) {
+    if (new_password && new_password_verify) {
       i.setState({ changePasswordRes: LOADING_REQUEST });
       const changePasswordRes = await HttpService.client.changePassword({
         new_password,
         new_password_verify,
-        old_password,
+        old_password: old_password || "",
       });
       if (changePasswordRes.state === "success") {
-        window.scrollTo(0, 0);
+        snapToTop();
         toast(I18NextService.i18n.t("password_changed"));
       }
 
@@ -1568,9 +1743,9 @@ export class Settings extends Component<any, SettingsState> {
     const res = await HttpService.client.exportSettings();
 
     if (res.state === "success") {
-      i.exportSettingsLink.current!.href = encodeURI(
-        `data:application/json,${JSON.stringify(res.data)}`,
-      );
+      i.exportSettingsLink.current!.href = `data:application/json,${encodeURIComponent(
+        JSON.stringify(res.data),
+      )}`;
       i.exportSettingsLink.current?.click();
     } else if (res.state === "failed") {
       toast(
@@ -1605,14 +1780,13 @@ export class Settings extends Component<any, SettingsState> {
           local_user: {
             show_nsfw,
             blur_nsfw,
-            auto_expand,
             theme,
-            default_sort_type,
+            default_post_sort_type,
+            default_comment_sort_type,
             default_listing_type,
             interface_language,
             show_avatars,
             show_bot_accounts,
-            show_scores,
             show_read_posts,
             send_notifications_to_email,
             email,
@@ -1629,7 +1803,7 @@ export class Settings extends Component<any, SettingsState> {
         } = siteRes.data.my_user!.local_user_view;
 
         UserService.Instance.myUserInfo = siteRes.data.my_user;
-        updateDataBsTheme(siteRes.data);
+        refreshTheme();
 
         i.setState(prev => ({
           ...prev,
@@ -1645,18 +1819,17 @@ export class Settings extends Component<any, SettingsState> {
             display_name,
             bio,
             matrix_user_id,
-            auto_expand,
             blur_nsfw,
             bot_account,
             default_listing_type,
-            default_sort_type,
+            default_post_sort_type,
+            default_comment_sort_type,
             discussion_languages: siteRes.data.my_user?.discussion_languages,
             email,
             interface_language,
             open_links_in_new_tab,
             send_notifications_to_email,
             show_read_posts,
-            show_scores,
           },
         }));
       }
@@ -1676,6 +1849,12 @@ export class Settings extends Component<any, SettingsState> {
     i.setState({ deleteAccountShowConfirm: !i.state.deleteAccountShowConfirm });
   }
 
+  handleDeleteAccountContentChange(i: Settings, event: any) {
+    i.setState(
+      s => ((s.deleteAccountForm.delete_content = event.target.checked), s),
+    );
+  }
+
   handleDeleteAccountPasswordChange(i: Settings, event: any) {
     i.setState(s => ((s.deleteAccountForm.password = event.target.value), s));
   }
@@ -1687,8 +1866,7 @@ export class Settings extends Component<any, SettingsState> {
       i.setState({ deleteAccountRes: LOADING_REQUEST });
       const deleteAccountRes = await HttpService.client.deleteAccount({
         password,
-        // TODO: promt user weather he wants the content to be deleted
-        delete_content: false,
+        delete_content: i.state.deleteAccountForm.delete_content || false,
       });
       if (deleteAccountRes.state === "success") {
         UserService.Instance.logout();

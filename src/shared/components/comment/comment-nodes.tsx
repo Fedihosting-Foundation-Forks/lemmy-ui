@@ -7,7 +7,6 @@ import {
   BanFromCommunity,
   BanPerson,
   BlockPerson,
-  CommentId,
   CommentResponse,
   CommunityModeratorView,
   CreateComment,
@@ -18,6 +17,7 @@ import {
   EditComment,
   GetComments,
   Language,
+  LocalUserVoteDisplayMode,
   MarkCommentReplyAsRead,
   MarkPersonMentionAsRead,
   PersonView,
@@ -44,13 +44,13 @@ interface CommentNodesProps {
   showContext?: boolean;
   showCommunity?: boolean;
   enableDownvotes?: boolean;
+  voteDisplayMode: LocalUserVoteDisplayMode;
   viewType: CommentViewType;
   allLanguages: Language[];
   siteLanguages: number[];
   hideImages?: boolean;
   isChild?: boolean;
   depth?: number;
-  finished: Map<CommentId, boolean | undefined>;
   onSaveComment(form: SaveComment): Promise<void>;
   onCommentReplyRead(form: MarkCommentReplyAsRead): void;
   onPersonMentionRead(form: MarkPersonMentionAsRead): void;
@@ -115,13 +115,13 @@ export class CommentNodes extends Component<CommentNodesProps, any> {
               showContext={this.props.showContext}
               showCommunity={this.props.showCommunity}
               enableDownvotes={this.props.enableDownvotes}
+              voteDisplayMode={this.props.voteDisplayMode}
               viewType={this.props.viewType}
               allLanguages={this.props.allLanguages}
               siteLanguages={this.props.siteLanguages}
               hideImages={this.props.hideImages}
               onCommentReplyRead={this.props.onCommentReplyRead}
               onPersonMentionRead={this.props.onPersonMentionRead}
-              finished={this.props.finished}
               onCreateComment={this.props.onCreateComment}
               onEditComment={this.props.onEditComment}
               onCommentVote={this.props.onCommentVote}

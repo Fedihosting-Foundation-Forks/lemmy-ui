@@ -1,21 +1,22 @@
 import { fetchThemeList, setIsoData, showLocal } from "@utils/app";
-import { capitalizeFirstLetter } from "@utils/helpers";
+import { capitalizeFirstLetter, resourcesSettled } from "@utils/helpers";
+import { scrollMixin } from "../mixins/scroll-mixin";
 import { RouteDataResponse } from "@utils/types";
 import classNames from "classnames";
-import { Component, linkEvent } from "inferno";
+import { Component } from "inferno";
 import {
   BannedPersonsResponse,
-  CreateCustomEmoji,
-  DeleteCustomEmoji,
-  EditCustomEmoji,
+  CreateOAuthProvider,
+  DeleteOAuthProvider,
+  EditOAuthProvider,
   EditSite,
   GetFederatedInstancesResponse,
   GetSiteResponse,
   LemmyHttp,
+  ListMediaResponse,
   PersonView,
 } from "lemmy-js-client";
 import { InitialFetchRequest } from "../../interfaces";
-import { removeFromEmojiDataModel, updateEmojiDataModel } from "../../markdown";
 import { FirstLoadService, I18NextService } from "../../services";
 import {
   EMPTY_REQUEST,
@@ -34,54 +35,92 @@ import RateLimitForm from "./rate-limit-form";
 import { SiteForm } from "./site-form";
 import { TaglineForm } from "./tagline-form";
 import { getHttpBaseInternal } from "../../utils/env";
+import { RouteComponentProps } from "inferno-router/dist/Route";
+import { IRoutePropsWithFetch } from "../../routes";
+import { MediaUploads } from "../common/media-uploads";
+import { Paginator } from "../common/paginator";
+import { snapToTop } from "@utils/browser";
+import { isBrowser } from "@utils/browser";
+import ConfirmationModal from "../common/modal/confirmation-modal";
+import OAuthProvidersTab from "./oauth/oauth-providers-tab";
 
 type AdminSettingsData = RouteDataResponse<{
   bannedRes: BannedPersonsResponse;
   instancesRes: GetFederatedInstancesResponse;
+  uploadsRes: ListMediaResponse;
 }>;
 
 interface AdminSettingsState {
   siteRes: GetSiteResponse;
   banned: PersonView[];
-  currentTab: string;
   instancesRes: RequestState<GetFederatedInstancesResponse>;
   bannedRes: RequestState<BannedPersonsResponse>;
   leaveAdminTeamRes: RequestState<GetSiteResponse>;
+  showConfirmLeaveAdmin: boolean;
+  uploadsRes: RequestState<ListMediaResponse>;
+  uploadsPage: number;
   loading: boolean;
   themeList: string[];
   isIsomorphic: boolean;
 }
 
-export class AdminSettings extends Component<any, AdminSettingsState> {
+type AdminSettingsRouteProps = RouteComponentProps<Record<string, never>> &
+  Record<string, never>;
+export type AdminSettingsFetchConfig = IRoutePropsWithFetch<
+  AdminSettingsData,
+  Record<string, never>,
+  Record<string, never>
+>;
+
+@scrollMixin
+export class AdminSettings extends Component<
+  AdminSettingsRouteProps,
+  AdminSettingsState
+> {
   private isoData = setIsoData<AdminSettingsData>(this.context);
   state: AdminSettingsState = {
     siteRes: this.isoData.site_res,
     banned: [],
-    currentTab: "site",
     bannedRes: EMPTY_REQUEST,
     instancesRes: EMPTY_REQUEST,
     leaveAdminTeamRes: EMPTY_REQUEST,
+    showConfirmLeaveAdmin: false,
+    uploadsRes: EMPTY_REQUEST,
+    uploadsPage: 1,
     loading: false,
     themeList: [],
     isIsomorphic: false,
   };
 
+  loadingSettled() {
+    return resourcesSettled([
+      this.state.bannedRes,
+      this.state.instancesRes,
+      this.state.uploadsRes,
+    ]);
+  }
+
   constructor(props: any, context: any) {
     super(props, context);
 
     this.handleEditSite = this.handleEditSite.bind(this);
-    this.handleEditEmoji = this.handleEditEmoji.bind(this);
-    this.handleDeleteEmoji = this.handleDeleteEmoji.bind(this);
-    this.handleCreateEmoji = this.handleCreateEmoji.bind(this);
+    this.handleUploadsPageChange = this.handleUploadsPageChange.bind(this);
+    this.handleToggleShowLeaveAdminConfirmation =
+      this.handleToggleShowLeaveAdminConfirmation.bind(this);
+    this.handleLeaveAdminTeam = this.handleLeaveAdminTeam.bind(this);
+    this.handleEditOAuthProvider = this.handleEditOAuthProvider.bind(this);
+    this.handleDeleteOAuthProvider = this.handleDeleteOAuthProvider.bind(this);
+    this.handleCreateOAuthProvider = this.handleCreateOAuthProvider.bind(this);
 
     // Only fetch the data if coming from another route
     if (FirstLoadService.isFirstLoad) {
-      const { bannedRes, instancesRes } = this.isoData.routeData;
+      const { bannedRes, instancesRes, uploadsRes } = this.isoData.routeData;
 
       this.state = {
         ...this.state,
         bannedRes,
         instancesRes,
+        uploadsRes,
         isIsomorphic: true,
       };
     }
@@ -96,12 +135,18 @@ export class AdminSettings extends Component<any, AdminSettingsState> {
     return {
       bannedRes: await client.getBannedPersons(),
       instancesRes: await client.getFederatedInstances(),
+      uploadsRes: await client.listAllMedia(),
     };
   }
 
-  async componentDidMount() {
-    if (!this.state.isIsomorphic) {
-      await this.fetchData();
+  async componentWillMount() {
+    if (isBrowser()) {
+      if (!this.state.isIsomorphic) {
+        await this.fetchData();
+      } else {
+        const themeList = await fetchThemeList();
+        this.setState({ themeList });
+      }
     }
   }
 
@@ -204,11 +249,7 @@ export class AdminSettings extends Component<any, AdminSettingsState> {
                   id="taglines-tab-pane"
                 >
                   <div className="row">
-                    <TaglineForm
-                      taglines={this.state.siteRes.taglines}
-                      onSaveSite={this.handleEditSite}
-                      loading={this.state.loading}
-                    />
+                    <TaglineForm />
                   </div>
                 </div>
               ),
@@ -225,12 +266,45 @@ export class AdminSettings extends Component<any, AdminSettingsState> {
                   id="emojis-tab-pane"
                 >
                   <div className="row">
-                    <EmojiForm
-                      onCreate={this.handleCreateEmoji}
-                      onDelete={this.handleDeleteEmoji}
-                      onEdit={this.handleEditEmoji}
-                    />
+                    <EmojiForm />
                   </div>
+                </div>
+              ),
+            },
+            {
+              key: "uploads",
+              label: I18NextService.i18n.t("uploads"),
+              getNode: isSelected => (
+                <div
+                  className={classNames("tab-pane", {
+                    active: isSelected,
+                  })}
+                  role="tabpanel"
+                  id="uploads-tab-pane"
+                >
+                  {this.uploads()}
+                </div>
+              ),
+            },
+            {
+              key: "auth",
+              label: I18NextService.i18n.t("authentication"),
+              getNode: isSelected => (
+                <div
+                  className={classNames("tab-pane", {
+                    active: isSelected,
+                  })}
+                  role="tabpanel"
+                  id="auth-tab-pane"
+                >
+                  <OAuthProvidersTab
+                    oauthProviders={
+                      this.state.siteRes.admin_oauth_providers ?? []
+                    }
+                    onCreate={this.handleCreateOAuthProvider}
+                    onDelete={this.handleDeleteOAuthProvider}
+                    onEdit={this.handleEditOAuthProvider}
+                  />
                 </div>
               ),
             },
@@ -244,20 +318,32 @@ export class AdminSettings extends Component<any, AdminSettingsState> {
     this.setState({
       bannedRes: LOADING_REQUEST,
       instancesRes: LOADING_REQUEST,
+      uploadsRes: LOADING_REQUEST,
       themeList: [],
     });
 
-    const [bannedRes, instancesRes, themeList] = await Promise.all([
+    const [bannedRes, instancesRes, uploadsRes, themeList] = await Promise.all([
       HttpService.client.getBannedPersons(),
       HttpService.client.getFederatedInstances(),
+      HttpService.client.listAllMedia({
+        page: this.state.uploadsPage,
+      }),
       fetchThemeList(),
     ]);
 
     this.setState({
       bannedRes,
       instancesRes,
+      uploadsRes,
       themeList,
     });
+  }
+
+  async fetchUploadsOnly() {
+    const uploadsRes = await HttpService.client.listAllMedia({
+      page: this.state.uploadsPage,
+    });
+    this.setState({ uploadsRes });
   }
 
   admins() {
@@ -274,6 +360,13 @@ export class AdminSettings extends Component<any, AdminSettingsState> {
           ))}
         </ul>
         {this.leaveAdmin()}
+        <ConfirmationModal
+          message={I18NextService.i18n.t("leave_admin_team_confirmation")}
+          loadingMessage={I18NextService.i18n.t("leaving_admin_team")}
+          onNo={this.handleToggleShowLeaveAdminConfirmation}
+          onYes={this.handleLeaveAdminTeam}
+          show={this.state.showConfirmLeaveAdmin}
+        />
       </>
     );
   }
@@ -281,7 +374,7 @@ export class AdminSettings extends Component<any, AdminSettingsState> {
   leaveAdmin() {
     return (
       <button
-        onClick={linkEvent(this, this.handleLeaveAdminTeam)}
+        onClick={this.handleToggleShowLeaveAdminConfirmation}
         className="btn btn-danger mb-2"
       >
         {this.state.leaveAdminTeamRes.state === "loading" ? (
@@ -319,6 +412,30 @@ export class AdminSettings extends Component<any, AdminSettingsState> {
     }
   }
 
+  uploads() {
+    switch (this.state.uploadsRes.state) {
+      case "loading":
+        return (
+          <h5>
+            <Spinner large />
+          </h5>
+        );
+      case "success": {
+        const uploadsRes = this.state.uploadsRes.data;
+        return (
+          <div>
+            <MediaUploads showUploader uploads={uploadsRes} />
+            <Paginator
+              page={this.state.uploadsPage}
+              onChange={this.handleUploadsPageChange}
+              nextDisabled={false}
+            />
+          </div>
+        );
+      }
+    }
+  }
+
   async handleEditSite(form: EditSite) {
     this.setState({ loading: true });
 
@@ -328,10 +445,12 @@ export class AdminSettings extends Component<any, AdminSettingsState> {
       this.setState(s => {
         s.siteRes.site_view = editRes.data.site_view;
         // TODO: Where to get taglines from?
-        s.siteRes.taglines = editRes.data.taglines;
         return s;
       });
       toast(I18NextService.i18n.t("site_saved"));
+
+      // You need to reload the page, to properly update the siteRes everywhere
+      setTimeout(() => location.reload(), 500);
     }
 
     this.setState({ loading: false });
@@ -339,40 +458,90 @@ export class AdminSettings extends Component<any, AdminSettingsState> {
     return editRes;
   }
 
-  handleSwitchTab(i: { ctx: AdminSettings; tab: string }) {
-    i.ctx.setState({ currentTab: i.tab });
+  handleToggleShowLeaveAdminConfirmation() {
+    this.setState(prev => ({
+      showConfirmLeaveAdmin: !prev.showConfirmLeaveAdmin,
+    }));
   }
 
-  async handleLeaveAdminTeam(i: AdminSettings) {
-    i.setState({ leaveAdminTeamRes: LOADING_REQUEST });
+  async handleLeaveAdminTeam() {
+    this.setState({ leaveAdminTeamRes: LOADING_REQUEST });
     this.setState({
       leaveAdminTeamRes: await HttpService.client.leaveAdmin(),
     });
 
     if (this.state.leaveAdminTeamRes.state === "success") {
       toast(I18NextService.i18n.t("left_admin_team"));
+      this.setState({ showConfirmLeaveAdmin: false });
       this.context.router.history.replace("/");
     }
   }
 
-  async handleEditEmoji(form: EditCustomEmoji) {
-    const res = await HttpService.client.editCustomEmoji(form);
-    if (res.state === "success") {
-      updateEmojiDataModel(res.data.custom_emoji);
-    }
+  async handleUploadsPageChange(val: number) {
+    this.setState({ uploadsPage: val });
+    snapToTop();
+    await this.fetchUploadsOnly();
   }
 
-  async handleDeleteEmoji(form: DeleteCustomEmoji) {
-    const res = await HttpService.client.deleteCustomEmoji(form);
+  async handleEditOAuthProvider(form: EditOAuthProvider) {
+    this.setState({ loading: true });
+
+    const res = await HttpService.client.editOAuthProvider(form);
+
     if (res.state === "success") {
-      removeFromEmojiDataModel(form.id);
+      const newOAuthProvider = res.data;
+      this.setState(s => {
+        s.siteRes.admin_oauth_providers = (
+          s.siteRes.admin_oauth_providers ?? []
+        ).map(p => {
+          return p?.id === newOAuthProvider.id ? newOAuthProvider : p;
+        });
+        return s;
+      });
+      toast(I18NextService.i18n.t("site_saved"));
+    } else {
+      toast(I18NextService.i18n.t("couldnt_edit_oauth_provider"), "danger");
     }
+
+    this.setState({ loading: false });
   }
 
-  async handleCreateEmoji(form: CreateCustomEmoji) {
-    const res = await HttpService.client.createCustomEmoji(form);
+  async handleDeleteOAuthProvider(form: DeleteOAuthProvider) {
+    this.setState({ loading: true });
+
+    const res = await HttpService.client.deleteOAuthProvider(form);
+
     if (res.state === "success") {
-      updateEmojiDataModel(res.data.custom_emoji);
+      this.setState(s => {
+        s.siteRes.admin_oauth_providers = (
+          s.siteRes.admin_oauth_providers ?? []
+        ).filter(p => p.id !== form.id);
+        return s;
+      });
+      toast(I18NextService.i18n.t("site_saved"));
+    } else {
+      toast(I18NextService.i18n.t("couldnt_delete_oauth_provider"), "danger");
     }
+
+    this.setState({ loading: false });
+  }
+
+  async handleCreateOAuthProvider(form: CreateOAuthProvider) {
+    this.setState({ loading: true });
+
+    const res = await HttpService.client.createOAuthProvider(form);
+    if (res.state === "success") {
+      this.setState(s => {
+        s.siteRes.admin_oauth_providers = [
+          ...(s.siteRes.admin_oauth_providers ?? []),
+          res.data,
+        ];
+      });
+      toast(I18NextService.i18n.t("site_saved"));
+    } else {
+      toast(I18NextService.i18n.t("couldnt_create_oauth_provider"), "danger");
+    }
+
+    this.setState({ loading: false });
   }
 }

@@ -1,6 +1,7 @@
 import { setIsoData } from "@utils/app";
 import { isBrowser } from "@utils/browser";
-import { validEmail } from "@utils/helpers";
+import { getQueryParams, resourcesSettled, validEmail } from "@utils/helpers";
+import { scrollMixin } from "../mixins/scroll-mixin";
 import { Component, linkEvent } from "inferno";
 import { T } from "inferno-i18next-dess";
 import {
@@ -10,7 +11,7 @@ import {
   LoginResponse,
   SiteView,
 } from "lemmy-js-client";
-import { joinLemmyUrl } from "../../config";
+import { joinLemmyUrl, validActorRegexPattern } from "../../config";
 import { mdToHtml } from "../../markdown";
 import { I18NextService, UserService } from "../../services";
 import {
@@ -24,6 +25,14 @@ import { HtmlTags } from "../common/html-tags";
 import { Icon, Spinner } from "../common/icon";
 import { MarkdownTextArea } from "../common/markdown-textarea";
 import PasswordInput from "../common/password-input";
+import { RouteComponentProps } from "inferno-router/dist/Route";
+import { RouteData } from "../../interfaces";
+import { IRoutePropsWithFetch } from "../../routes";
+import { handleUseOAuthProvider } from "./login";
+
+interface SignupProps {
+  sso_provider_id?: string;
+}
 
 interface State {
   registerRes: RequestState<LoginResponse>;
@@ -43,7 +52,25 @@ interface State {
   siteRes: GetSiteResponse;
 }
 
-export class Signup extends Component<any, State> {
+export function getSignupQueryParams(source?: string): SignupProps {
+  return getQueryParams<SignupProps>(
+    {
+      sso_provider_id: (param?: string) => param,
+    },
+    source,
+  );
+}
+
+type SignupRouteProps = RouteComponentProps<Record<string, never>> &
+  SignupProps;
+export type SignupFetchConfig = IRoutePropsWithFetch<
+  RouteData,
+  Record<string, never>,
+  SignupProps
+>;
+
+@scrollMixin
+export class Signup extends Component<SignupRouteProps, State> {
   private isoData = setIsoData(this.context);
   private audio?: HTMLAudioElement;
 
@@ -51,11 +78,18 @@ export class Signup extends Component<any, State> {
     registerRes: EMPTY_REQUEST,
     captchaRes: EMPTY_REQUEST,
     form: {
-      show_nsfw: false,
+      show_nsfw: !!this.isoData.site_res.site_view.site.content_warning,
     },
     captchaPlaying: false,
     siteRes: this.isoData.site_res,
   };
+
+  loadingSettled() {
+    return (
+      !this.state.siteRes.site_view.local_site.captcha_enabled ||
+      resourcesSettled([this.state.captchaRes])
+    );
+  }
 
   constructor(props: any, context: any) {
     super(props, context);
@@ -63,8 +97,11 @@ export class Signup extends Component<any, State> {
     this.handleAnswerChange = this.handleAnswerChange.bind(this);
   }
 
-  async componentDidMount() {
-    if (this.state.siteRes.site_view.local_site.captcha_enabled) {
+  async componentWillMount() {
+    if (
+      this.state.siteRes.site_view.local_site.captcha_enabled &&
+      isBrowser()
+    ) {
       await this.fetchCaptcha();
     }
   }
@@ -116,6 +153,8 @@ export class Signup extends Component<any, State> {
 
   registerForm() {
     const siteView = this.state.siteRes.site_view;
+    const oauth_provider = getOAuthProvider(this);
+
     return (
       <form
         className="was-validated"
@@ -150,63 +189,85 @@ export class Signup extends Component<any, State> {
               onInput={linkEvent(this, this.handleRegisterUsernameChange)}
               required
               minLength={3}
-              pattern="[a-zA-Z0-9_]+"
+              pattern={validActorRegexPattern}
               title={I18NextService.i18n.t("community_reqs")}
             />
           </div>
         </div>
 
-        <div className="mb-3 row">
-          <label className="col-sm-2 col-form-label" htmlFor="register-email">
-            {I18NextService.i18n.t("email")}
-          </label>
-          <div className="col-sm-10">
-            <input
-              type="email"
-              id="register-email"
-              className="form-control"
-              placeholder={
-                siteView.local_site.require_email_verification
-                  ? I18NextService.i18n.t("required")
-                  : I18NextService.i18n.t("optional")
-              }
-              value={this.state.form.email}
-              autoComplete="email"
-              onInput={linkEvent(this, this.handleRegisterEmailChange)}
-              required={siteView.local_site.require_email_verification}
-              minLength={3}
-            />
-            {!siteView.local_site.require_email_verification &&
-              this.state.form.email &&
-              !validEmail(this.state.form.email) && (
-                <div className="mt-2 mb-0 alert alert-warning" role="alert">
-                  <Icon icon="alert-triangle" classes="icon-inline me-2" />
-                  {I18NextService.i18n.t("no_password_reset")}
+        {!oauth_provider && (
+          <>
+            {
+              <div className="mb-3 row">
+                <label
+                  className="col-sm-2 col-form-label"
+                  htmlFor="register-email"
+                >
+                  {I18NextService.i18n.t("email")}
+                </label>
+                <div className="col-sm-10">
+                  <input
+                    type="email"
+                    id="register-email"
+                    className="form-control"
+                    placeholder={
+                      siteView.local_site.require_email_verification
+                        ? I18NextService.i18n.t("required")
+                        : I18NextService.i18n.t("optional")
+                    }
+                    value={this.state.form.email}
+                    autoComplete="email"
+                    onInput={linkEvent(this, this.handleRegisterEmailChange)}
+                    required={siteView.local_site.require_email_verification}
+                    minLength={3}
+                  />
+                  {!siteView.local_site.require_email_verification &&
+                    this.state.form.email &&
+                    !validEmail(this.state.form.email) && (
+                      <div
+                        className="mt-2 mb-0 alert alert-warning"
+                        role="alert"
+                      >
+                        <Icon
+                          icon="alert-triangle"
+                          classes="icon-inline me-2"
+                        />
+                        {I18NextService.i18n.t("no_password_reset")}
+                      </div>
+                    )}
                 </div>
-              )}
-          </div>
-        </div>
+              </div>
+            }
 
-        <div className="mb-3">
-          <PasswordInput
-            id="register-password"
-            value={this.state.form.password}
-            onInput={linkEvent(this, this.handleRegisterPasswordChange)}
-            showStrength
-            label={I18NextService.i18n.t("password")}
-            isNew
-          />
-        </div>
+            {
+              <div className="mb-3">
+                <PasswordInput
+                  id="register-password"
+                  value={this.state.form.password}
+                  onInput={linkEvent(this, this.handleRegisterPasswordChange)}
+                  showStrength
+                  label={I18NextService.i18n.t("password")}
+                  isNew
+                />
+              </div>
+            }
 
-        <div className="mb-3">
-          <PasswordInput
-            id="register-verify-password"
-            value={this.state.form.password_verify}
-            onInput={linkEvent(this, this.handleRegisterPasswordVerifyChange)}
-            label={I18NextService.i18n.t("verify_password")}
-            isNew
-          />
-        </div>
+            {
+              <div className="mb-3">
+                <PasswordInput
+                  id="register-verify-password"
+                  value={this.state.form.password_verify}
+                  onInput={linkEvent(
+                    this,
+                    this.handleRegisterPasswordVerifyChange,
+                  )}
+                  label={I18NextService.i18n.t("verify_password")}
+                  isNew
+                />
+              </div>
+            }
+          </>
+        )}
 
         {siteView.local_site.registration_mode === "RequireApplication" && (
           <>
@@ -221,6 +282,7 @@ export class Signup extends Component<any, State> {
                     className="md-div"
                     dangerouslySetInnerHTML={mdToHtml(
                       siteView.local_site.application_question,
+                      () => this.forceUpdate(),
                     )}
                   />
                 )}
@@ -241,6 +303,7 @@ export class Signup extends Component<any, State> {
                   hideNavigationWarnings
                   allLanguages={[]}
                   siteLanguages={[]}
+                  renderAsDiv={true}
                 />
               </div>
             </div>
@@ -279,7 +342,12 @@ export class Signup extends Component<any, State> {
               {this.state.registerRes.state === "loading" ? (
                 <Spinner />
               ) : (
-                this.titleName(siteView)
+                [
+                  this.titleName(siteView),
+                  ...(oauth_provider
+                    ? [`(${oauth_provider.display_name})`]
+                    : []),
+                ].join(" ")
               )}
             </button>
           </div>
@@ -372,6 +440,19 @@ export class Signup extends Component<any, State> {
       password_verify,
       username,
     } = i.state.form;
+
+    const oauthProvider = getOAuthProvider(i);
+
+    // oauth registration
+    if (username && oauthProvider)
+      return handleUseOAuthProvider({
+        oauth_provider: oauthProvider,
+        username,
+        answer,
+        show_nsfw,
+      });
+
+    // normal registration
     if (username && password && password_verify) {
       i.setState({ registerRes: LOADING_REQUEST });
 
@@ -498,4 +579,10 @@ export class Signup extends Component<any, State> {
   captchaPngSrc(captcha: CaptchaResponse) {
     return `data:image/png;base64,${captcha.png}`;
   }
+}
+
+function getOAuthProvider(signup: Signup) {
+  return (signup.state.siteRes.oauth_providers ?? []).find(
+    provider => provider.id === Number(signup.props?.sso_provider_id ?? -1),
+  );
 }

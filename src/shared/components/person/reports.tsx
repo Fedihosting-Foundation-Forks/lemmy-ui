@@ -2,9 +2,13 @@ import {
   editCommentReport,
   editPostReport,
   editPrivateMessageReport,
+  enableDownvotes,
+  enableNsfw,
   setIsoData,
+  voteDisplayMode,
 } from "@utils/app";
-import { randomStr } from "@utils/helpers";
+import { randomStr, resourcesSettled } from "@utils/helpers";
+import { scrollMixin } from "../mixins/scroll-mixin";
 import { amAdmin } from "@utils/roles";
 import { RouteDataResponse } from "@utils/types";
 import classNames from "classnames";
@@ -50,6 +54,9 @@ import { PostReport } from "../post/post-report";
 import { PrivateMessageReport } from "../private_message/private-message-report";
 import { UnreadCounterService } from "../../services";
 import { getHttpBaseInternal } from "../../utils/env";
+import { RouteComponentProps } from "inferno-router/dist/Route";
+import { IRoutePropsWithFetch } from "../../routes";
+import { isBrowser } from "@utils/browser";
 
 enum UnreadOrAll {
   Unread,
@@ -93,7 +100,16 @@ interface ReportsState {
   isIsomorphic: boolean;
 }
 
-export class Reports extends Component<any, ReportsState> {
+type ReportsRouteProps = RouteComponentProps<Record<string, never>> &
+  Record<string, never>;
+export type ReportsFetchConfig = IRoutePropsWithFetch<
+  ReportsData,
+  Record<string, never>,
+  Record<string, never>
+>;
+
+@scrollMixin
+export class Reports extends Component<ReportsRouteProps, ReportsState> {
   private isoData = setIsoData<ReportsData>(this.context);
   state: ReportsState = {
     commentReportsRes: EMPTY_REQUEST,
@@ -105,6 +121,14 @@ export class Reports extends Component<any, ReportsState> {
     siteRes: this.isoData.site_res,
     isIsomorphic: false,
   };
+
+  loadingSettled() {
+    return resourcesSettled([
+      this.state.commentReportsRes,
+      this.state.postReportsRes,
+      this.state.messageReportsRes,
+    ]);
+  }
 
   constructor(props: any, context: any) {
     super(props, context);
@@ -137,8 +161,8 @@ export class Reports extends Component<any, ReportsState> {
     }
   }
 
-  async componentDidMount() {
-    if (!this.state.isIsomorphic) {
+  async componentWillMount() {
+    if (!this.state.isIsomorphic && isBrowser()) {
       await this.refetch();
     }
   }
@@ -392,12 +416,15 @@ export class Reports extends Component<any, ReportsState> {
   }
 
   renderItemType(i: ItemType) {
+    const siteRes = this.state.siteRes;
     switch (i.type_) {
       case MessageEnum.CommentReport:
         return (
           <CommentReport
             key={i.id}
             report={i.view as CommentReportView}
+            enableDownvotes={enableDownvotes(siteRes)}
+            voteDisplayMode={voteDisplayMode(siteRes)}
             onResolveReport={this.handleResolveCommentReport}
           />
         );
@@ -406,6 +433,9 @@ export class Reports extends Component<any, ReportsState> {
           <PostReport
             key={i.id}
             report={i.view as PostReportView}
+            enableDownvotes={enableDownvotes(siteRes)}
+            voteDisplayMode={voteDisplayMode(siteRes)}
+            enableNsfw={enableNsfw(siteRes)}
             onResolveReport={this.handleResolvePostReport}
           />
         );
@@ -423,9 +453,22 @@ export class Reports extends Component<any, ReportsState> {
   }
 
   all() {
+    const combined = this.buildCombined;
+    if (
+      combined.length === 0 &&
+      (this.state.commentReportsRes.state === "loading" ||
+        this.state.postReportsRes.state === "loading" ||
+        this.state.messageReportsRes.state === "loading")
+    ) {
+      return (
+        <h5>
+          <Spinner large />
+        </h5>
+      );
+    }
     return (
       <div>
-        {this.buildCombined.map(i => (
+        {combined.map(i => (
           <>
             <hr />
             {this.renderItemType(i)}
@@ -437,6 +480,7 @@ export class Reports extends Component<any, ReportsState> {
 
   commentReports() {
     const res = this.state.commentReportsRes;
+    const siteRes = this.state.siteRes;
     switch (res.state) {
       case "loading":
         return (
@@ -454,6 +498,8 @@ export class Reports extends Component<any, ReportsState> {
                 <CommentReport
                   key={cr.comment_report.id}
                   report={cr}
+                  enableDownvotes={enableDownvotes(siteRes)}
+                  voteDisplayMode={voteDisplayMode(siteRes)}
                   onResolveReport={this.handleResolveCommentReport}
                 />
               </>
@@ -466,6 +512,7 @@ export class Reports extends Component<any, ReportsState> {
 
   postReports() {
     const res = this.state.postReportsRes;
+    const siteRes = this.state.siteRes;
     switch (res.state) {
       case "loading":
         return (
@@ -482,6 +529,9 @@ export class Reports extends Component<any, ReportsState> {
                 <hr />
                 <PostReport
                   key={pr.post_report.id}
+                  enableDownvotes={enableDownvotes(siteRes)}
+                  voteDisplayMode={voteDisplayMode(siteRes)}
+                  enableNsfw={enableNsfw(siteRes)}
                   report={pr}
                   onResolveReport={this.handleResolvePostReport}
                 />
@@ -539,6 +589,7 @@ export class Reports extends Component<any, ReportsState> {
 
   static async fetchInitialData({
     headers,
+    site,
   }: InitialFetchRequest): Promise<ReportsData> {
     const client = wrapClient(
       new LemmyHttp(getHttpBaseInternal(), { headers }),
@@ -565,7 +616,7 @@ export class Reports extends Component<any, ReportsState> {
       messageReportsRes: EMPTY_REQUEST,
     };
 
-    if (amAdmin()) {
+    if (amAdmin(site.my_user)) {
       const privateMessageReportsForm: ListPrivateMessageReports = {
         unresolved_only,
         page,
@@ -580,7 +631,9 @@ export class Reports extends Component<any, ReportsState> {
     return data;
   }
 
+  refetchToken?: symbol;
   async refetch() {
+    const token = (this.refetchToken = Symbol());
     const unresolved_only = this.state.unreadOrAll === UnreadOrAll.Unread;
     const page = this.state.page;
     const limit = fetchLimit;
@@ -600,17 +653,30 @@ export class Reports extends Component<any, ReportsState> {
       limit,
     };
 
-    this.setState({
-      commentReportsRes: await HttpService.client.listCommentReports(form),
-      postReportsRes: await HttpService.client.listPostReports(form),
-    });
+    const commentReportPromise = HttpService.client
+      .listCommentReports(form)
+      .then(commentReportsRes => {
+        if (token === this.refetchToken) {
+          this.setState({ commentReportsRes });
+        }
+      });
+    const postReportPromise = HttpService.client
+      .listPostReports(form)
+      .then(postReportsRes => {
+        if (token === this.refetchToken) {
+          this.setState({ postReportsRes });
+        }
+      });
 
     if (amAdmin()) {
-      this.setState({
-        messageReportsRes:
-          await HttpService.client.listPrivateMessageReports(form),
-      });
+      const messageReportsRes =
+        await HttpService.client.listPrivateMessageReports(form);
+      if (token === this.refetchToken) {
+        this.setState({ messageReportsRes });
+      }
     }
+
+    await Promise.all([commentReportPromise, postReportPromise]);
   }
 
   async handleResolveCommentReport(form: ResolveCommentReport) {

@@ -4,16 +4,22 @@ import {
   CreateCommunity as CreateCommunityI,
   GetSiteResponse,
 } from "lemmy-js-client";
-import { HttpService, I18NextService } from "../../services";
+import { HttpService, I18NextService, UserService } from "../../services";
 import { HtmlTags } from "../common/html-tags";
 import { CommunityForm } from "./community-form";
+import { simpleScrollMixin } from "../mixins/scroll-mixin";
+import { RouteComponentProps } from "inferno-router/dist/Route";
 
 interface CreateCommunityState {
   siteRes: GetSiteResponse;
   loading: boolean;
 }
 
-export class CreateCommunity extends Component<any, CreateCommunityState> {
+@simpleScrollMixin
+export class CreateCommunity extends Component<
+  RouteComponentProps<Record<string, never>>,
+  CreateCommunityState
+> {
   private isoData = setIsoData(this.context);
   state: CreateCommunityState = {
     siteRes: this.isoData.site_res,
@@ -62,6 +68,11 @@ export class CreateCommunity extends Component<any, CreateCommunityState> {
     const res = await HttpService.client.createCommunity(form);
 
     if (res.state === "success") {
+      const myUser = UserService.Instance.myUserInfo!;
+      UserService.Instance.myUserInfo?.moderates.push({
+        community: res.data.community_view.community,
+        moderator: myUser.local_user_view.person,
+      });
       const name = res.data.community_view.community.name;
       this.props.history.replace(`/c/${name}`);
     } else {

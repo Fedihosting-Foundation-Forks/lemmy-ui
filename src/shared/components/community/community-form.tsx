@@ -3,6 +3,7 @@ import { Component, linkEvent } from "inferno";
 import { Prompt } from "inferno-router";
 import {
   CommunityView,
+  CommunityVisibility,
   CreateCommunity,
   EditCommunity,
   Language,
@@ -12,6 +13,8 @@ import { Icon, Spinner } from "../common/icon";
 import { ImageUploadForm } from "../common/image-upload-form";
 import { LanguageSelect } from "../common/language-select";
 import { MarkdownTextArea } from "../common/markdown-textarea";
+import { tippyMixin } from "../mixins/tippy-mixin";
+import { validActorRegexPattern } from "../../config";
 
 interface CommunityFormProps {
   community_view?: CommunityView; // If a community is given, that means this is an edit
@@ -34,10 +37,12 @@ interface CommunityFormState {
     nsfw?: boolean;
     posting_restricted_to_mods?: boolean;
     discussion_languages?: number[];
+    visibilty?: CommunityVisibility;
   };
   submitted: boolean;
 }
 
+@tippyMixin
 export class CommunityForm extends Component<
   CommunityFormProps,
   CommunityFormState
@@ -78,6 +83,7 @@ export class CommunityForm extends Component<
           banner: cv.community.banner,
           posting_restricted_to_mods: cv.community.posting_restricted_to_mods,
           discussion_languages: this.props.communityLanguages,
+          visibilty: cv.community.visibility,
         },
       };
     }
@@ -124,7 +130,7 @@ export class CommunityForm extends Component<
                 onInput={linkEvent(this, this.handleCommunityNameChange)}
                 required
                 minLength={3}
-                pattern="[a-z0-9_]+"
+                pattern={validActorRegexPattern}
                 title={I18NextService.i18n.t("community_reqs")}
               />
             </div>
@@ -219,6 +225,24 @@ export class CommunityForm extends Component<
         )}
         <div className="mb-3 row">
           <legend className="col-form-label col-6 pt-0">
+            {I18NextService.i18n.t("community_visibility")}
+          </legend>
+          <div className="col-6">
+            <select
+              className="form-select position-static"
+              id="community-visibility"
+              onChange={linkEvent(this, this.handleCommunityVisibilityChange)}
+              value={this.state.form.visibilty ?? "Public"}
+            >
+              <option value="Public">{I18NextService.i18n.t("public")}</option>
+              <option value="LocalOnly">
+                {I18NextService.i18n.t("local_only")}
+              </option>
+            </select>
+          </div>
+        </div>
+        <div className="mb-3 row">
+          <legend className="col-form-label col-6 pt-0">
             {I18NextService.i18n.t("only_mods_can_post_in_community")}
           </legend>
           <div className="col-6">
@@ -291,6 +315,7 @@ export class CommunityForm extends Component<
         nsfw: cForm.nsfw,
         posting_restricted_to_mods: cForm.posting_restricted_to_mods,
         discussion_languages: cForm.discussion_languages,
+        visibility: cForm.visibilty,
       });
     } else {
       if (cForm.title && cForm.name) {
@@ -303,6 +328,7 @@ export class CommunityForm extends Component<
           nsfw: cForm.nsfw,
           posting_restricted_to_mods: cForm.posting_restricted_to_mods,
           discussion_languages: cForm.discussion_languages,
+          visibility: cForm.visibilty,
         });
       }
     }
@@ -328,6 +354,10 @@ export class CommunityForm extends Component<
     i.setState(
       s => ((s.form.posting_restricted_to_mods = event.target.checked), s),
     );
+  }
+
+  handleCommunityVisibilityChange(i: CommunityForm, event: any) {
+    i.setState(s => ((s.form.visibilty = event.target.value), s));
   }
 
   handleCancel(i: CommunityForm) {

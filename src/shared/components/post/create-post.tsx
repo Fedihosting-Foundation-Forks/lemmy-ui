@@ -3,10 +3,21 @@ import {
   enableDownvotes,
   enableNsfw,
   setIsoData,
+  voteDisplayMode,
 } from "@utils/app";
-import { getIdFromString, getQueryParams } from "@utils/helpers";
-import type { QueryParams } from "@utils/types";
-import { Choice, RouteDataResponse } from "@utils/types";
+import {
+  bareRoutePush,
+  getIdFromString,
+  getQueryParams,
+  getQueryString,
+} from "@utils/helpers";
+import {
+  Choice,
+  CrossPostParams,
+  QueryParams,
+  RouteDataResponse,
+  StringBoolean,
+} from "@utils/types";
 import { Component } from "inferno";
 import { RouteComponentProps } from "inferno-router/dist/Route";
 import {
@@ -27,12 +38,22 @@ import {
   wrapClient,
 } from "../../services/HttpService";
 import { HtmlTags } from "../common/html-tags";
-import { Spinner } from "../common/icon";
 import { PostForm } from "./post-form";
 import { getHttpBaseInternal } from "../../utils/env";
+import { IRoutePropsWithFetch } from "../../routes";
+import { simpleScrollMixin } from "../mixins/scroll-mixin";
+import { toast } from "../../toast";
+import { isBrowser } from "@utils/browser";
 
 export interface CreatePostProps {
   communityId?: number;
+  url?: string;
+  title?: string;
+  body?: string;
+  languageId?: number;
+  nsfw?: StringBoolean;
+  customThumbnailUrl?: string;
+  altText?: string;
 }
 
 type CreatePostData = RouteDataResponse<{
@@ -40,44 +61,80 @@ type CreatePostData = RouteDataResponse<{
   initialCommunitiesRes: ListCommunitiesResponse;
 }>;
 
-function getCreatePostQueryParams() {
-  return getQueryParams<CreatePostProps>({
-    communityId: getIdFromString,
-  });
+export function getCreatePostQueryParams(source?: string): CreatePostProps {
+  return getQueryParams<CreatePostProps>(
+    {
+      communityId: getIdFromString,
+      url: (url?: string) => url,
+      body: (body?: string) => body,
+      languageId: getIdFromString,
+      nsfw: (nsfw?: StringBoolean) => nsfw,
+      customThumbnailUrl: (customThumbnailUrl?: string) => customThumbnailUrl,
+      title: (title?: string) => title,
+      altText: (altText?: string) => altText,
+    },
+    source,
+  );
 }
 
 function fetchCommunitiesForOptions(client: WrappedLemmyHttp) {
   return client.listCommunities({ limit: 30, sort: "TopMonth", type_: "All" });
 }
 
+function stringAsQueryParam(param?: string) {
+  return (param?.length ?? 0) > 0 ? param : undefined;
+}
+
 interface CreatePostState {
   siteRes: GetSiteResponse;
   loading: boolean;
   selectedCommunityChoice?: Choice;
+  selectedCommunityIsNsfw: boolean;
   initialCommunitiesRes: RequestState<ListCommunitiesResponse>;
   isIsomorphic: boolean;
+  resetCounter: number; // resets PostForm when changed
 }
 
+type CreatePostPathProps = Record<string, never>;
+type CreatePostRouteProps = RouteComponentProps<CreatePostPathProps> &
+  CreatePostProps;
+export type CreatePostFetchConfig = IRoutePropsWithFetch<
+  CreatePostData,
+  CreatePostPathProps,
+  CreatePostProps
+>;
+
+@simpleScrollMixin
 export class CreatePost extends Component<
-  RouteComponentProps<Record<string, never>>,
+  CreatePostRouteProps,
   CreatePostState
 > {
   private isoData = setIsoData<CreatePostData>(this.context);
   state: CreatePostState = {
     siteRes: this.isoData.site_res,
-    loading: true,
+    loading: false,
     initialCommunitiesRes: EMPTY_REQUEST,
     isIsomorphic: false,
+    resetCounter: 0,
+    selectedCommunityIsNsfw: false,
   };
 
-  constructor(props: RouteComponentProps<Record<string, never>>, context: any) {
+  constructor(props: CreatePostRouteProps, context: any) {
     super(props, context);
 
     this.handlePostCreate = this.handlePostCreate.bind(this);
     this.handleSelectedCommunityChange =
       this.handleSelectedCommunityChange.bind(this);
+    this.handleTitleBlur = this.handleTitleBlur.bind(this);
+    this.handleUrlBlur = this.handleUrlBlur.bind(this);
+    this.handleBodyBlur = this.handleBodyBlur.bind(this);
+    this.handleLanguageChange = this.handleLanguageChange.bind(this);
+    this.handleNsfwChange = this.handleNsfwChange.bind(this);
+    this.handleThumbnailUrlBlur = this.handleThumbnailUrlBlur.bind(this);
+    this.handleAltTextBlur = this.handleAltTextBlur.bind(this);
+    this.handleCopySuggestedTitle = this.handleCopySuggestedTitle.bind(this);
 
-    // Only fetch the data if coming from another route
+    // Only fetch the data if coming from another routeupdate
     if (FirstLoadService.isFirstLoad) {
       const { communityResponse: communityRes, initialCommunitiesRes } =
         this.isoData.routeData;
@@ -102,9 +159,7 @@ export class CreatePost extends Component<
     }
   }
 
-  async fetchCommunity() {
-    const { communityId } = getCreatePostQueryParams();
-
+  async fetchCommunity({ communityId }: CreatePostProps) {
     if (communityId) {
       const res = await HttpService.client.getCommunity({
         id: communityId,
@@ -112,16 +167,17 @@ export class CreatePost extends Component<
       if (res.state === "success") {
         this.setState({
           selectedCommunityChoice: communityToChoice(res.data.community_view),
+          selectedCommunityIsNsfw: res.data.community_view.community.nsfw,
           loading: false,
         });
       }
     }
   }
 
-  async componentDidMount() {
+  async componentWillMount() {
     // TODO test this
-    if (!this.state.isIsomorphic) {
-      const { communityId } = getCreatePostQueryParams();
+    if (!this.state.isIsomorphic && isBrowser()) {
+      const { communityId } = this.props;
 
       const initialCommunitiesRes = await fetchCommunitiesForOptions(
         HttpService.client,
@@ -134,13 +190,38 @@ export class CreatePost extends Component<
       if (
         communityId?.toString() !== this.state.selectedCommunityChoice?.value
       ) {
-        await this.fetchCommunity();
+        await this.fetchCommunity({ communityId });
       } else if (!communityId) {
         this.setState({
           selectedCommunityChoice: undefined,
           loading: false,
         });
       }
+
+      const locationState = this.props.history.location.state as
+        | CrossPostParams
+        | undefined;
+      if (locationState) {
+        this.updateUrl({
+          title: locationState.name,
+          url: locationState.url,
+          body: locationState.body,
+          altText: locationState.altText,
+          nsfw: locationState.nsfw,
+          languageId: locationState.languageId,
+          customThumbnailUrl: locationState.customThumbnailUrl,
+        });
+        this.setState(s => ({ resetCounter: s.resetCounter + 1 }));
+      }
+    }
+  }
+
+  componentWillReceiveProps(nextProps: CreatePostRouteProps) {
+    if (bareRoutePush(this.props, nextProps)) {
+      this.setState(s => ({ resetCounter: s.resetCounter + 1 }));
+    }
+    if (this.props.communityId !== nextProps.communityId) {
+      this.fetchCommunity(nextProps);
     }
   }
 
@@ -151,11 +232,33 @@ export class CreatePost extends Component<
   }
 
   render() {
-    const { selectedCommunityChoice } = this.state;
+    const {
+      selectedCommunityChoice,
+      selectedCommunityIsNsfw,
+      siteRes,
+      loading,
+    } = this.state;
+    const {
+      body,
+      communityId,
+      customThumbnailUrl,
+      languageId,
+      title,
+      nsfw,
+      url,
+      altText,
+    } = this.props;
 
-    const locationState = this.props.history.location.state as
-      | PostFormParams
-      | undefined;
+    const params: PostFormParams = {
+      name: title,
+      url,
+      body,
+      community_id: communityId,
+      custom_thumbnail: customThumbnailUrl,
+      language_id: languageId,
+      nsfw: nsfw === "true",
+      alt_text: altText,
+    };
 
     return (
       <div className="create-post container-lg">
@@ -163,61 +266,74 @@ export class CreatePost extends Component<
           title={this.documentTitle}
           path={this.context.router.route.match.url}
         />
-        {this.state.loading ? (
-          <h5>
-            <Spinner large />
-          </h5>
-        ) : (
-          <div className="row">
-            <div
-              id="createPostForm"
-              className="col-12 col-lg-6 offset-lg-3 mb-4"
-            >
-              <h1 className="h4 mb-4">
-                {I18NextService.i18n.t("create_post")}
-              </h1>
-              <PostForm
-                onCreate={this.handlePostCreate}
-                params={locationState}
-                enableDownvotes={enableDownvotes(this.state.siteRes)}
-                enableNsfw={enableNsfw(this.state.siteRes)}
-                allLanguages={this.state.siteRes.all_languages}
-                siteLanguages={this.state.siteRes.discussion_languages}
-                selectedCommunityChoice={selectedCommunityChoice}
-                onSelectCommunity={this.handleSelectedCommunityChange}
-                initialCommunities={
-                  this.state.initialCommunitiesRes.state === "success"
-                    ? this.state.initialCommunitiesRes.data.communities
-                    : []
-                }
-              />
-            </div>
+        <div className="row">
+          <div id="createPostForm" className="col-12 col-lg-6 offset-lg-3 mb-4">
+            <h1 className="h4 mb-4">{I18NextService.i18n.t("create_post")}</h1>
+            <PostForm
+              key={this.state.resetCounter}
+              onCreate={this.handlePostCreate}
+              params={params}
+              enableDownvotes={enableDownvotes(siteRes)}
+              voteDisplayMode={voteDisplayMode(siteRes)}
+              enableNsfw={enableNsfw(siteRes)}
+              allLanguages={siteRes.all_languages}
+              siteLanguages={siteRes.discussion_languages}
+              selectedCommunityChoice={selectedCommunityChoice}
+              onSelectCommunity={this.handleSelectedCommunityChange}
+              initialCommunities={
+                this.state.initialCommunitiesRes.state === "success"
+                  ? this.state.initialCommunitiesRes.data.communities
+                  : []
+              }
+              loading={loading}
+              onBodyBlur={this.handleBodyBlur}
+              onLanguageChange={this.handleLanguageChange}
+              onTitleBlur={this.handleTitleBlur}
+              onUrlBlur={this.handleUrlBlur}
+              onThumbnailUrlBlur={this.handleThumbnailUrlBlur}
+              onNsfwChange={this.handleNsfwChange}
+              onAltTextBlur={this.handleAltTextBlur}
+              onCopySuggestedTitle={this.handleCopySuggestedTitle}
+              isNsfwCommunity={selectedCommunityIsNsfw}
+            />
           </div>
-        )}
+        </div>
       </div>
     );
   }
 
-  async updateUrl({ communityId }: Partial<CreatePostProps>) {
-    const { communityId: urlCommunityId } = getCreatePostQueryParams();
+  async updateUrl(props: Partial<CreatePostProps>) {
+    const {
+      body,
+      communityId,
+      customThumbnailUrl,
+      languageId,
+      nsfw,
+      url,
+      title,
+      altText,
+    } = {
+      ...this.props,
+      ...props,
+    };
 
-    const locationState = this.props.history.location.state as
-      | PostFormParams
-      | undefined;
+    const createPostQueryParams: QueryParams<CreatePostProps> = {
+      body: stringAsQueryParam(body),
+      communityId: communityId?.toString(),
+      customThumbnailUrl: stringAsQueryParam(customThumbnailUrl),
+      languageId: languageId?.toString(),
+      title: stringAsQueryParam(title),
+      nsfw,
+      url: stringAsQueryParam(url),
+      altText: stringAsQueryParam(altText),
+    };
 
-    const url = new URL(location.href);
+    this.props.history.replace({
+      pathname: "/create_post",
+      search: getQueryString(createPostQueryParams),
+    });
 
-    const newId = (communityId ?? urlCommunityId)?.toString();
-
-    if (newId !== undefined) {
-      url.searchParams.set("communityId", newId);
-    } else {
-      url.searchParams.delete("communityId");
-    }
-
-    history.replaceState(locationState, "", url);
-
-    await this.fetchCommunity();
+    await this.fetchCommunity({ communityId });
   }
 
   handleSelectedCommunityChange(choice: Choice) {
@@ -226,16 +342,51 @@ export class CreatePost extends Component<
     });
   }
 
-  async handlePostCreate(form: CreatePostI) {
+  handleTitleBlur(title: string) {
+    this.updateUrl({ title });
+  }
+
+  handleUrlBlur(url: string) {
+    this.updateUrl({ url });
+  }
+
+  handleBodyBlur(body: string) {
+    this.updateUrl({ body });
+  }
+
+  handleLanguageChange(languageId: number) {
+    this.updateUrl({ languageId });
+  }
+
+  handleNsfwChange(nsfw: StringBoolean) {
+    this.updateUrl({ nsfw });
+  }
+
+  handleThumbnailUrlBlur(customThumbnailUrl: string) {
+    this.updateUrl({ customThumbnailUrl });
+  }
+
+  handleAltTextBlur(altText: string) {
+    this.updateUrl({ altText });
+  }
+
+  handleCopySuggestedTitle(url: string, title: string) {
+    this.updateUrl({ url, title });
+  }
+
+  async handlePostCreate(form: CreatePostI, bypassNavWarning: () => void) {
+    this.setState({ loading: true });
     const res = await HttpService.client.createPost(form);
 
     if (res.state === "success") {
       const postId = res.data.post_view.post.id;
+      bypassNavWarning();
       this.props.history.replace(`/post/${postId}`);
-    } else {
+    } else if (res.state === "failed") {
       this.setState({
         loading: false,
       });
+      toast(I18NextService.i18n.t(res.err.message), "danger");
     }
   }
 
@@ -243,7 +394,8 @@ export class CreatePost extends Component<
     headers,
     query: { communityId },
   }: InitialFetchRequest<
-    QueryParams<CreatePostProps>
+    CreatePostPathProps,
+    CreatePostProps
   >): Promise<CreatePostData> {
     const client = wrapClient(
       new LemmyHttp(getHttpBaseInternal(), { headers }),
@@ -255,7 +407,7 @@ export class CreatePost extends Component<
 
     if (communityId) {
       const form: GetCommunity = {
-        id: getIdFromString(communityId),
+        id: communityId,
       };
 
       data.communityResponse = await client.getCommunity(form);

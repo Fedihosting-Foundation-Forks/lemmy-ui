@@ -2,7 +2,6 @@ import { capitalizeFirstLetter, validInstanceTLD } from "@utils/helpers";
 import {
   Component,
   InfernoKeyboardEvent,
-  InfernoMouseEvent,
   InfernoNode,
   linkEvent,
 } from "inferno";
@@ -21,6 +20,7 @@ import { ImageUploadForm } from "../common/image-upload-form";
 import { LanguageSelect } from "../common/language-select";
 import { ListingTypeSelect } from "../common/listing-type-select";
 import { MarkdownTextArea } from "../common/markdown-textarea";
+import UrlListTextarea from "../common/url-list-textarea";
 
 interface SiteFormProps {
   blockedInstances?: Instance[];
@@ -63,7 +63,7 @@ export class SiteForm extends Component<SiteFormProps, SiteFormState> {
       description: site.description,
       enable_downvotes: ls.enable_downvotes,
       registration_mode: ls.registration_mode,
-      enable_nsfw: ls.enable_nsfw,
+      oauth_registration: ls.oauth_registration,
       community_creation_admin_only: ls.community_creation_admin_only,
       icon: site.icon,
       banner: site.banner,
@@ -84,6 +84,9 @@ export class SiteForm extends Component<SiteFormProps, SiteFormState> {
       captcha_difficulty: ls.captcha_difficulty,
       allowed_instances: this.props.allowedInstances?.map(i => i.domain),
       blocked_instances: this.props.blockedInstances?.map(i => i.domain),
+      blocked_urls: this.props.siteRes.blocked_urls.map(u => u.url),
+      content_warning: this.props.siteRes.site_view.site.content_warning,
+      enable_nsfw: !!this.props.siteRes.site_view.site.content_warning,
     };
   }
 
@@ -112,6 +115,10 @@ export class SiteForm extends Component<SiteFormProps, SiteFormState> {
 
     this.handleInstanceEnterPress = this.handleInstanceEnterPress.bind(this);
     this.handleInstanceTextChange = this.handleInstanceTextChange.bind(this);
+
+    this.handleBlockedUrlsUpdate = this.handleBlockedUrlsUpdate.bind(this);
+    this.handleSiteContentWarningChange =
+      this.handleSiteContentWarningChange.bind(this);
   }
 
   render() {
@@ -265,6 +272,26 @@ export class SiteForm extends Component<SiteFormProps, SiteFormState> {
             </div>
           </div>
         </div>
+        {this.state.siteForm.enable_nsfw && (
+          <div className="mb-3 row">
+            <div className="alert small alert-info" role="alert">
+              <Icon icon="info" classes="icon-inline me-2" />
+              {I18NextService.i18n.t("content_warning_setting_blurb")}
+            </div>
+            <label className="col-12 col-form-label">
+              {I18NextService.i18n.t("content_warning")}
+            </label>
+            <div className="col-12">
+              <MarkdownTextArea
+                initialContent={this.state.siteForm.content_warning}
+                onContentChange={this.handleSiteContentWarningChange}
+                hideNavigationWarnings
+                allLanguages={[]}
+                siteLanguages={[]}
+              />
+            </div>
+          </div>
+        )}
         <div className="mb-3 row">
           <div className="col-12">
             <label
@@ -307,6 +334,25 @@ export class SiteForm extends Component<SiteFormProps, SiteFormState> {
             </div>
           </div>
         )}
+        <div className="mb-3 row">
+          <div className="col-12">
+            <div className="form-check">
+              <input
+                className="form-check-input"
+                id="create-site-oauth-registration"
+                type="checkbox"
+                checked={this.state.siteForm.oauth_registration}
+                onChange={linkEvent(this, this.handleSiteOauthRegistration)}
+              />
+              <label
+                className="form-check-label"
+                htmlFor="create-site-oauth-registration"
+              >
+                {I18NextService.i18n.t("oauth_registration")}
+              </label>
+            </div>
+          </div>
+        </div>
         <div className="mb-3 row">
           <div className="col-12">
             <div className="form-check">
@@ -500,6 +546,10 @@ export class SiteForm extends Component<SiteFormProps, SiteFormState> {
           onChange={this.handleDiscussionLanguageChange}
           showAll
         />
+        <UrlListTextarea
+          urls={this.state.siteForm.blocked_urls ?? []}
+          onUpdate={this.handleBlockedUrlsUpdate}
+        />
         <div className="mb-3 row">
           <label
             className="col-12 col-form-label"
@@ -651,29 +701,30 @@ export class SiteForm extends Component<SiteFormProps, SiteFormState> {
           {I18NextService.i18n.t(key)}
         </label>
         <div className="d-flex justify-content-between align-items-center">
-          <input
-            type="text"
-            placeholder="instance.tld"
-            id={id}
-            className="form-control"
-            value={value}
-            onInput={linkEvent(key, this.handleInstanceTextChange)}
-            onKeyUp={linkEvent(key, this.handleInstanceEnterPress)}
-          />
-          <button
-            type="button"
-            className="btn btn-sm bg-success ms-2"
-            onClick={linkEvent(key, this.handleAddInstance)}
-            style={"width: 2rem; height: 2rem;"}
-            tabIndex={
-              -1 /* Making this untabble because handling enter key in text input makes keyboard support for this button redundant */
-            }
-          >
-            <Icon
-              icon="add"
-              classes="icon-inline text-light m-auto d-block position-static"
+          <div className="input-group ms-2">
+            <input
+              type="text"
+              placeholder="instance.tld"
+              id={id}
+              className="form-control"
+              value={value}
+              onInput={linkEvent(key, this.handleInstanceTextChange)}
+              onKeyUp={linkEvent(key, this.handleInstanceEnterPress)}
             />
-          </button>
+            <button
+              type="button"
+              className="btn bg-success"
+              onClick={linkEvent(key, this.handleAddInstance)}
+              tabIndex={
+                -1 /* Making this untabble because handling enter key in text input makes keyboard support for this button redundant */
+              }
+            >
+              <Icon
+                icon="add"
+                classes="icon-inline text-light m-auto d-block position-static"
+              />
+            </button>
+          </div>
         </div>
         {selectedInstances && selectedInstances.length > 0 && (
           <ul className="mt-3 list-unstyled w-100 d-flex flex-column justify-content-around align-items-center">
@@ -688,7 +739,6 @@ export class SiteForm extends Component<SiteFormProps, SiteFormState> {
                 <button
                   id={instance}
                   type="button"
-                  style={"width: 2rem; height: 2rem;"}
                   className="btn btn-sm bg-danger"
                   onClick={linkEvent(
                     { key, instance },
@@ -752,6 +802,7 @@ export class SiteForm extends Component<SiteFormProps, SiteFormState> {
         enable_downvotes: stateSiteForm.enable_downvotes,
         application_question: stateSiteForm.application_question,
         registration_mode: stateSiteForm.registration_mode,
+        oauth_registration: stateSiteForm.oauth_registration,
         require_email_verification: stateSiteForm.require_email_verification,
         private_instance: stateSiteForm.private_instance,
         default_theme: stateSiteForm.default_theme,
@@ -847,42 +898,6 @@ export class SiteForm extends Component<SiteFormProps, SiteFormState> {
     this.setState(s => ((s.siteForm.legal_information = val), s));
   }
 
-  handleTaglineChange(i: SiteForm, index: number, val: string) {
-    const taglines = i.state.siteForm.taglines;
-    if (taglines) {
-      taglines[index] = val;
-      i.setState(i.state);
-    }
-  }
-
-  handleDeleteTaglineClick(
-    i: SiteForm,
-    index: number,
-    event: InfernoMouseEvent<HTMLButtonElement>,
-  ) {
-    event.preventDefault();
-    const taglines = i.state.siteForm.taglines;
-    if (taglines) {
-      taglines.splice(index, 1);
-      i.state.siteForm.taglines = undefined;
-      i.setState(i.state);
-      i.state.siteForm.taglines = taglines;
-      i.setState(i.state);
-    }
-  }
-
-  handleAddTaglineClick(
-    i: SiteForm,
-    event: InfernoMouseEvent<HTMLButtonElement>,
-  ) {
-    event.preventDefault();
-    if (!i.state.siteForm.taglines) {
-      i.state.siteForm.taglines = [];
-    }
-    i.state.siteForm.taglines.push("");
-    i.setState(i.state);
-  }
-
   handleSiteApplicationQuestionChange(val: string) {
     this.setState(s => ((s.siteForm.application_question = val), s));
   }
@@ -894,11 +909,19 @@ export class SiteForm extends Component<SiteFormProps, SiteFormState> {
 
   handleSiteEnableNsfwChange(i: SiteForm, event: any) {
     i.state.siteForm.enable_nsfw = event.target.checked;
+    if (!event.target.checked) {
+      i.state.siteForm.content_warning = "";
+    }
     i.setState(i.state);
   }
 
   handleSiteRegistrationModeChange(i: SiteForm, event: any) {
     i.state.siteForm.registration_mode = event.target.value;
+    i.setState(i.state);
+  }
+
+  handleSiteOauthRegistration(i: SiteForm, event: any) {
+    i.state.siteForm.oauth_registration = event.target.checked;
     i.setState(i.state);
   }
 
@@ -993,5 +1016,23 @@ export class SiteForm extends Component<SiteFormProps, SiteFormState> {
 
   handleDefaultPostListingTypeChange(val: ListingType) {
     this.setState(s => ((s.siteForm.default_post_listing_type = val), s));
+  }
+
+  handleBlockedUrlsUpdate(newBlockedUrls: string[]) {
+    this.setState(prev => ({
+      ...prev,
+      siteForm: {
+        ...prev.siteForm,
+        blocked_urls: newBlockedUrls,
+      },
+    }));
+  }
+
+  handleSiteContentWarningChange(val: string) {
+    this.state.siteForm.content_warning = val;
+    if (val) {
+      this.state.siteForm.enable_nsfw = true;
+    }
+    this.setState(this.state);
   }
 }

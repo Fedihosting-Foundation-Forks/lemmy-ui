@@ -3,6 +3,7 @@ import { T } from "inferno-i18next-dess";
 import {
   CommentReportView,
   CommentView,
+  LocalUserVoteDisplayMode,
   ResolveCommentReport,
 } from "lemmy-js-client";
 import { CommentNodeI, CommentViewType } from "../../interfaces";
@@ -11,9 +12,12 @@ import { Icon, Spinner } from "../common/icon";
 import { PersonListing } from "../person/person-listing";
 import { CommentNode } from "./comment-node";
 import { EMPTY_REQUEST } from "../../services/HttpService";
+import { tippyMixin } from "../mixins/tippy-mixin";
 
 interface CommentReportProps {
   report: CommentReportView;
+  enableDownvotes?: boolean;
+  voteDisplayMode: LocalUserVoteDisplayMode;
   onResolveReport(form: ResolveCommentReport): void;
 }
 
@@ -21,6 +25,7 @@ interface CommentReportState {
   loading: boolean;
 }
 
+@tippyMixin
 export class CommentReport extends Component<
   CommentReportProps,
   CommentReportState
@@ -63,6 +68,7 @@ export class CommentReport extends Component<
       saved: false,
       creator_blocked: false,
       my_vote: r.my_vote,
+      banned_from_community: false,
     };
 
     const node: CommentNodeI = {
@@ -76,14 +82,14 @@ export class CommentReport extends Component<
         <CommentNode
           node={node}
           viewType={CommentViewType.Flat}
-          enableDownvotes={true}
+          enableDownvotes={this.props.enableDownvotes}
+          voteDisplayMode={this.props.voteDisplayMode}
           viewOnly={true}
           showCommunity={true}
           allLanguages={[]}
           siteLanguages={[]}
           hideImages
           // All of these are unused, since its viewonly
-          finished={new Map()}
           onSaveComment={async () => {}}
           onBlockPerson={async () => {}}
           onDeleteComment={async () => {}}

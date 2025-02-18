@@ -22,6 +22,11 @@ import { HtmlTags } from "../common/html-tags";
 import { Spinner } from "../common/icon";
 import { PrivateMessageForm } from "./private-message-form";
 import { getHttpBaseInternal } from "../../utils/env";
+import { RouteComponentProps } from "inferno-router/dist/Route";
+import { IRoutePropsWithFetch } from "../../routes";
+import { resourcesSettled } from "@utils/helpers";
+import { scrollMixin } from "../mixins/scroll-mixin";
+import { isBrowser } from "@utils/browser";
 
 type CreatePrivateMessageData = RouteDataResponse<{
   recipientDetailsResponse: GetPersonDetailsResponse;
@@ -34,8 +39,18 @@ interface CreatePrivateMessageState {
   isIsomorphic: boolean;
 }
 
+type CreatePrivateMessagePathProps = { recipient_id: string };
+type CreatePrivateMessageRouteProps =
+  RouteComponentProps<CreatePrivateMessagePathProps> & Record<string, never>;
+export type CreatePrivateMessageFetchConfig = IRoutePropsWithFetch<
+  CreatePrivateMessageData,
+  CreatePrivateMessagePathProps,
+  Record<string, never>
+>;
+
+@scrollMixin
 export class CreatePrivateMessage extends Component<
-  any,
+  CreatePrivateMessageRouteProps,
   CreatePrivateMessageState
 > {
   private isoData = setIsoData<CreatePrivateMessageData>(this.context);
@@ -45,6 +60,10 @@ export class CreatePrivateMessage extends Component<
     recipientId: getRecipientIdFromProps(this.props),
     isIsomorphic: false,
   };
+
+  loadingSettled() {
+    return resourcesSettled([this.state.recipientRes]);
+  }
 
   constructor(props: any, context: any) {
     super(props, context);
@@ -61,20 +80,20 @@ export class CreatePrivateMessage extends Component<
     }
   }
 
-  async componentDidMount() {
-    if (!this.state.isIsomorphic) {
+  async componentWillMount() {
+    if (!this.state.isIsomorphic && isBrowser()) {
       await this.fetchPersonDetails();
     }
   }
 
   static async fetchInitialData({
     headers,
-    path,
-  }: InitialFetchRequest): Promise<CreatePrivateMessageData> {
+    match,
+  }: InitialFetchRequest<CreatePrivateMessagePathProps>): Promise<CreatePrivateMessageData> {
     const client = wrapClient(
       new LemmyHttp(getHttpBaseInternal(), { headers }),
     );
-    const person_id = Number(path.split("/").pop());
+    const person_id = getRecipientIdFromProps({ match });
 
     const form: GetPersonDetails = {
       person_id,
@@ -149,14 +168,22 @@ export class CreatePrivateMessage extends Component<
     );
   }
 
-  async handlePrivateMessageCreate(form: CreatePrivateMessageI) {
+  async handlePrivateMessageCreate(
+    form: CreatePrivateMessageI,
+    bypassNavWarning: () => void,
+  ): Promise<boolean> {
     const res = await HttpService.client.createPrivateMessage(form);
 
     if (res.state === "success") {
       toast(I18NextService.i18n.t("message_sent"));
 
+      bypassNavWarning();
       // Navigate to the front
       this.context.router.history.push("/");
+    } else if (res.state === "failed") {
+      toast(I18NextService.i18n.t(res.err.message), "danger");
     }
+
+    return res.state !== "failed";
   }
 }

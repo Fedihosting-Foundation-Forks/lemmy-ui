@@ -36,7 +36,7 @@ export class ImageUploadForm extends Component<
       <form className="image-upload-form d-inline">
         {this.props.imageSrc && (
           <span className="d-inline-block position-relative mb-2">
-            {/* TODO: Create "Current Iamge" translation for alt text */}
+            {/* TODO: Create "Current Image" translation for alt text */}
             <img
               alt=""
               src={this.props.imageSrc}
@@ -77,8 +77,6 @@ export class ImageUploadForm extends Component<
     i.setState({ loading: true });
 
     HttpService.client.uploadImage({ image }).then(res => {
-      console.log("pictrs upload:");
-      console.log(res);
       if (res.state === "success") {
         if (res.data.msg === "ok") {
           i.props.onUpload(res.data.url as string);

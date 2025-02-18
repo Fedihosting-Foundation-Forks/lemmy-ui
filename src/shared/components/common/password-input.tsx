@@ -5,6 +5,7 @@ import { Component, FormEventHandler, linkEvent } from "inferno";
 import { NavLink } from "inferno-router";
 import { I18NextService } from "../../services";
 import { Icon } from "./icon";
+import { tippyMixin } from "../mixins/tippy-mixin";
 
 interface PasswordInputProps {
   id: string;
@@ -15,6 +16,7 @@ interface PasswordInputProps {
   label?: string | null;
   showForgotLink?: boolean;
   isNew?: boolean;
+  required?: boolean;
 }
 
 interface PasswordInputState {
@@ -55,6 +57,7 @@ function handleToggleShow(i: PasswordInput) {
   }));
 }
 
+@tippyMixin
 class PasswordInput extends Component<PasswordInputProps, PasswordInputState> {
   state: PasswordInputState = {
     show: false,
@@ -75,6 +78,7 @@ class PasswordInput extends Component<PasswordInputProps, PasswordInputState> {
         label,
         showForgotLink,
         isNew,
+        required,
       },
       state: { show },
     } = this;
@@ -96,9 +100,11 @@ class PasswordInput extends Component<PasswordInputProps, PasswordInputState> {
                 autoComplete={isNew ? "new-password" : "current-password"}
                 onInput={onInput}
                 value={value}
-                required
-                maxLength={60}
+                required={required !== false}
+                pattern=".+"
+                title={I18NextService.i18n.t("invalid_password")}
                 minLength={10}
+                maxLength={60}
               />
               <button
                 className="btn btn-outline-dark"

@@ -15,6 +15,7 @@ import { toast } from "../../toast";
 import { Icon } from "../common/icon";
 import { PictrsImage } from "../common/pictrs-image";
 import { Subscription } from "rxjs";
+import { tippyMixin } from "../mixins/tippy-mixin";
 
 interface NavbarProps {
   siteRes?: GetSiteResponse;
@@ -42,6 +43,7 @@ function handleLogOut(i: Navbar) {
   handleCollapseClick(i);
 }
 
+@tippyMixin
 export class Navbar extends Component<NavbarProps, NavbarState> {
   collapseButtonRef = createRef<HTMLButtonElement>();
   mobileMenuRef = createRef<HTMLDivElement>();
@@ -61,7 +63,7 @@ export class Navbar extends Component<NavbarProps, NavbarState> {
     this.handleOutsideMenuClick = this.handleOutsideMenuClick.bind(this);
   }
 
-  async componentDidMount() {
+  async componentWillMount() {
     // Subscribe to jwt changes
     if (isBrowser()) {
       // On the first load, check the unreads
@@ -78,7 +80,6 @@ export class Navbar extends Component<NavbarProps, NavbarState> {
         UnreadCounterService.Instance.unreadApplicationCountSubject.subscribe(
           unreadApplicationCount => this.setState({ unreadApplicationCount }),
         );
-      this.requestNotificationPermission();
 
       document.addEventListener("mouseup", this.handleOutsideMenuClick);
     }
@@ -468,7 +469,7 @@ export class Navbar extends Component<NavbarProps, NavbarState> {
 
   requestNotificationPermission() {
     if (UserService.Instance.myUserInfo) {
-      document.addEventListener("DOMContentLoaded", function () {
+      document.addEventListener("lemmy-hydrated", function () {
         if (!Notification) {
           toast(I18NextService.i18n.t("notifications_error"), "danger");
           return;

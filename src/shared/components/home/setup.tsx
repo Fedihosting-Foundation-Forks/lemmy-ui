@@ -17,6 +17,9 @@ import {
 import { Spinner } from "../common/icon";
 import PasswordInput from "../common/password-input";
 import { SiteForm } from "./site-form";
+import { simpleScrollMixin } from "../mixins/scroll-mixin";
+import { RouteComponentProps } from "inferno-router/dist/Route";
+import { isBrowser } from "@utils/browser";
 
 interface State {
   form: {
@@ -36,7 +39,11 @@ interface State {
   siteRes: GetSiteResponse;
 }
 
-export class Setup extends Component<any, State> {
+@simpleScrollMixin
+export class Setup extends Component<
+  RouteComponentProps<Record<string, never>>,
+  State
+> {
   private isoData = setIsoData(this.context);
 
   state: State = {
@@ -55,8 +62,10 @@ export class Setup extends Component<any, State> {
     this.handleCreateSite = this.handleCreateSite.bind(this);
   }
 
-  async componentDidMount() {
-    this.setState({ themeList: await fetchThemeList() });
+  async componentWillMount() {
+    if (isBrowser()) {
+      this.setState({ themeList: await fetchThemeList() });
+    }
   }
 
   get documentTitle(): string {

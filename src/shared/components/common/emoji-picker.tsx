@@ -2,6 +2,7 @@ import { Component, linkEvent } from "inferno";
 import { I18NextService } from "../../services";
 import { EmojiMart } from "./emoji-mart";
 import { Icon } from "./icon";
+import { tippyMixin } from "../mixins/tippy-mixin";
 
 interface EmojiPickerProps {
   onEmojiClick?(val: any): any;
@@ -12,10 +13,13 @@ interface EmojiPickerState {
   showPicker: boolean;
 }
 
-function closeEmojiMartOnEsc(i, event): void {
-  event.key === "Escape" && i.setState({ showPicker: false });
+function closeEmojiMartOnEsc(i: EmojiPicker, event: KeyboardEvent): void {
+  if (event.key === "Escape") {
+    i.setState({ showPicker: false });
+  }
 }
 
+@tippyMixin
 export class EmojiPicker extends Component<EmojiPickerProps, EmojiPickerState> {
   private emptyState: EmojiPickerState = {
     showPicker: false,
@@ -70,9 +74,11 @@ export class EmojiPicker extends Component<EmojiPickerProps, EmojiPickerState> {
     e.preventDefault();
     i.setState({ showPicker: !i.state.showPicker });
 
-    i.state.showPicker
-      ? document.addEventListener("keyup", e => closeEmojiMartOnEsc(i, e))
-      : document.removeEventListener("keyup", e => closeEmojiMartOnEsc(i, e));
+    if (i.state.showPicker) {
+      document.addEventListener("keyup", e => closeEmojiMartOnEsc(i, e));
+    } else {
+      document.removeEventListener("keyup", e => closeEmojiMartOnEsc(i, e));
+    }
   }
 
   handleEmojiClick(e: any) {

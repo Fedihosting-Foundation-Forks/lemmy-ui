@@ -1,12 +1,13 @@
-import { myAuth } from "@utils/app";
+import { myAuth, setIsoData } from "@utils/app";
 import { canShare, share } from "@utils/browser";
 import { getExternalHost, getHttpBase } from "@utils/env";
-import { futureDaysToUnixTime, hostname } from "@utils/helpers";
+import { formatPastDate, futureDaysToUnixTime, hostname } from "@utils/helpers";
 import { isImage, isVideo } from "@utils/media";
 import { canAdmin, canMod } from "@utils/roles";
 import classNames from "classnames";
 import { Component, linkEvent } from "inferno";
 import { Link } from "inferno-router";
+import { T } from "inferno-i18next-dess";
 import {
   AddAdmin,
   AddModToCommunity,
@@ -19,7 +20,9 @@ import {
   DeletePost,
   EditPost,
   FeaturePost,
+  HidePost,
   Language,
+  LocalUserVoteDisplayMode,
   LockPost,
   MarkPostAsRead,
   PersonView,
@@ -31,11 +34,11 @@ import {
   SavePost,
   TransferCommunity,
 } from "lemmy-js-client";
-import { relTags } from "../../config";
-import { VoteContentType } from "../../interfaces";
+import { relTags, torrentHelpUrl } from "../../config";
+import { IsoDataOptionalSite, VoteContentType } from "../../interfaces";
 import { mdToHtml, mdToHtmlInline } from "../../markdown";
 import { I18NextService, UserService } from "../../services";
-import { setupTippy } from "../../tippy";
+import { tippyMixin } from "../mixins/tippy-mixin";
 import { Icon } from "../common/icon";
 import { MomentTime } from "../common/moment-time";
 import { PictrsImage } from "../common/pictrs-image";
@@ -45,10 +48,14 @@ import { CommunityLink } from "../community/community-link";
 import { PersonListing } from "../person/person-listing";
 import { MetadataCard } from "./metadata-card";
 import { PostForm } from "./post-form";
-import { BanUpdateForm } from "../common/mod-action-form-modal";
+import { BanUpdateForm } from "../common/modal/mod-action-form-modal";
 import PostActionDropdown from "../common/content-actions/post-action-dropdown";
 import { CrossPostParams } from "@utils/types";
 import { RequestState } from "../../services/HttpService";
+import { toast } from "../../toast";
+import isMagnetLink, {
+  extractMagnetLinkDownloadName,
+} from "@utils/media/is-magnet-link";
 
 type PostListingState = {
   showEdit: boolean;
@@ -56,6 +63,7 @@ type PostListingState = {
   viewSource: boolean;
   showAdvanced: boolean;
   showBody: boolean;
+  loading: boolean;
 };
 
 interface PostListingProps {
@@ -72,6 +80,7 @@ interface PostListingProps {
   showBody?: boolean;
   hideImage?: boolean;
   enableDownvotes?: boolean;
+  voteDisplayMode: LocalUserVoteDisplayMode;
   enableNsfw?: boolean;
   viewOnly?: boolean;
   onPostEdit(form: EditPost): Promise<RequestState<PostResponse>>;
@@ -91,15 +100,20 @@ interface PostListingProps {
   onAddAdmin(form: AddAdmin): Promise<void>;
   onTransferCommunity(form: TransferCommunity): Promise<void>;
   onMarkPostAsRead(form: MarkPostAsRead): void;
+  onHidePost(form: HidePost): Promise<void>;
+  onScrollIntoCommentsClick?(e: MouseEvent): void;
 }
 
+@tippyMixin
 export class PostListing extends Component<PostListingProps, PostListingState> {
+  private readonly isoData: IsoDataOptionalSite = setIsoData(this.context);
   state: PostListingState = {
     showEdit: false,
     imageExpanded: false,
     viewSource: false,
     showAdvanced: false,
     showBody: false,
+    loading: false,
   };
 
   constructor(props: any, context: any) {
@@ -124,16 +138,33 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
     this.handleModBanFromSite = this.handleModBanFromSite.bind(this);
     this.handlePurgePerson = this.handlePurgePerson.bind(this);
     this.handlePurgePost = this.handlePurgePost.bind(this);
+    this.handleHidePost = this.handleHidePost.bind(this);
   }
 
-  componentDidMount(): void {
-    if (UserService.Instance.myUserInfo) {
-      const { auto_expand, blur_nsfw } =
-        UserService.Instance.myUserInfo.local_user_view.local_user;
+  unlisten = () => {};
+
+  componentWillMount(): void {
+    if (
+      UserService.Instance.myUserInfo &&
+      !this.isoData.showAdultConsentModal
+    ) {
+      const blur_nsfw =
+        UserService.Instance.myUserInfo.local_user_view.local_user.blur_nsfw;
       this.setState({
-        imageExpanded: auto_expand && !(blur_nsfw && this.postView.post.nsfw),
+        imageExpanded: !(blur_nsfw && this.postView.post.nsfw),
       });
     }
+
+    // Leave edit mode on navigation
+    this.unlisten = this.context.router.history.listen(() => {
+      if (this.state.showEdit) {
+        this.setState({ showEdit: false });
+      }
+    });
+  }
+
+  componentWillUnmount(): void {
+    this.unlisten();
   }
 
   get postView(): PostView {
@@ -149,9 +180,14 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
           <>
             {this.listing()}
             {this.state.imageExpanded && !this.props.hideImage && this.img}
+            {this.showBody &&
+              post.url &&
+              isMagnetLink(post.url) &&
+              this.torrentHelp()}
             {this.showBody && post.url && post.embed_title && (
               <MetadataCard post={post} />
             )}
+            {this.showBody && this.videoBlock}
             {this.showBody && this.body()}
           </>
         ) : (
@@ -162,8 +198,11 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
             onCancel={this.handleEditCancel}
             enableNsfw={this.props.enableNsfw}
             enableDownvotes={this.props.enableDownvotes}
+            voteDisplayMode={this.props.voteDisplayMode}
             allLanguages={this.props.allLanguages}
             siteLanguages={this.props.siteLanguages}
+            loading={this.state.loading}
+            isNsfwCommunity={this.postView.community.nsfw}
           />
         )}
       </div>
@@ -177,7 +216,10 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
         {this.state.viewSource ? (
           <pre>{body}</pre>
         ) : (
-          <div className="md-div" dangerouslySetInnerHTML={mdToHtml(body)} />
+          <div
+            className="md-div"
+            dangerouslySetInnerHTML={mdToHtml(body, () => this.forceUpdate())}
+          />
         )}
       </article>
     ) : (
@@ -185,13 +227,69 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
     );
   }
 
+  torrentHelp() {
+    return (
+      <div className="alert alert-info small my-2" role="alert">
+        <Icon icon="info" classes="icon-inline me-2" />
+        <T parent="span" i18nKey="torrent_help">
+          #
+          <a className="alert-link" rel={relTags} href={torrentHelpUrl}>
+            #
+          </a>
+        </T>
+      </div>
+    );
+  }
+
+  get videoBlock() {
+    const post = this.postView.post;
+    const url = post.url;
+
+    // if direct video link or embedded video link
+    if ((url && isVideo(url)) || isVideo(post.embed_video_url ?? "")) {
+      return (
+        <div className="ratio ratio-16x9 mt-3">
+          <video
+            onLoadStart={linkEvent(this, this.handleVideoLoadStart)}
+            onPlay={linkEvent(this, this.handleVideoLoadStart)}
+            onVolumeChange={linkEvent(this, this.handleVideoVolumeChange)}
+            controls
+          >
+            <source src={post.embed_video_url ?? url} type="video/mp4" />
+          </video>
+        </div>
+      );
+    } else if (post.embed_video_url) {
+      return (
+        <div className="ratio ratio-16x9 mt-3">
+          <iframe
+            title="video embed"
+            src={post.embed_video_url}
+            sandbox="allow-same-origin allow-scripts"
+            allowFullScreen={true}
+          ></iframe>
+        </div>
+      );
+    }
+  }
+
   get img() {
-    if (this.imageSrc) {
+    if (this.isoData.showAdultConsentModal) {
+      return <></>;
+    }
+
+    // Use the full-size image for expands
+    const post = this.postView.post;
+    const url = post.url;
+    const thumbnail = post.thumbnail_url;
+    const imageSrc = url && isImage(url) ? url : thumbnail;
+
+    if (imageSrc) {
       return (
         <>
           <div className="offset-sm-3 my-2 d-none d-sm-block">
-            <a href={this.imageSrc} className="d-inline-block">
-              <PictrsImage src={this.imageSrc} />
+            <a href={imageSrc} className="d-inline-block">
+              <PictrsImage src={imageSrc} alt={post.alt_text} />
             </a>
           </div>
           <div className="my-2 d-block d-sm-none">
@@ -200,44 +298,10 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
               className="p-0 border-0 bg-transparent d-inline-block"
               onClick={linkEvent(this, this.handleImageExpandClick)}
             >
-              <PictrsImage src={this.imageSrc} />
+              <PictrsImage src={imageSrc} alt={post.alt_text} />
             </button>
           </div>
         </>
-      );
-    }
-
-    const { post } = this.postView;
-    const { url } = post;
-
-    // if direct video link
-    if (url && isVideo(url)) {
-      return (
-        <div className="embed-responsive ratio ratio-16x9 mt-3">
-          <video
-            onLoadStart={linkEvent(this, this.handleVideoLoadStart)}
-            onPlay={linkEvent(this, this.handleVideoLoadStart)}
-            onVolumeChange={linkEvent(this, this.handleVideoVolumeChange)}
-            controls
-            className="embed-responsive-item col-12"
-          >
-            <source src={url} type="video/mp4" />
-          </video>
-        </div>
-      );
-    }
-
-    // if embedded video link
-    if (url && post.embed_video_url) {
-      return (
-        <div className="ratio ratio-16x9">
-          <iframe
-            allowFullScreen
-            className="post-metadata-iframe"
-            src={post.embed_video_url}
-            title={post.embed_title}
-          ></iframe>
-        </div>
       );
     }
 
@@ -250,24 +314,10 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
       <PictrsImage
         src={src}
         thumbnail
-        alt=""
+        alt={pv.post.alt_text}
         nsfw={pv.post.nsfw || pv.community.nsfw}
       />
     );
-  }
-
-  get imageSrc(): string | undefined {
-    const post = this.postView.post;
-    const url = post.url;
-    const thumbnail = post.thumbnail_url;
-
-    if (thumbnail) {
-      return thumbnail;
-    } else if (url && isImage(url)) {
-      return url;
-    } else {
-      return undefined;
-    }
   }
 
   thumbnail() {
@@ -275,7 +325,7 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
     const url = post.url;
     const thumbnail = post.thumbnail_url;
 
-    if (!this.props.hideImage && url && isImage(url) && this.imageSrc) {
+    if (!this.props.hideImage && url && isImage(url) && thumbnail) {
       return (
         <button
           type="button"
@@ -284,14 +334,14 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
           onClick={linkEvent(this, this.handleImageExpandClick)}
           aria-label={I18NextService.i18n.t("expand_here")}
         >
-          {this.imgThumb(this.imageSrc)}
+          {this.imgThumb(thumbnail)}
           <Icon
             icon="image"
             classes="d-block text-white position-absolute end-0 top-0 mini-overlay text-opacity-75 text-opacity-100-hover"
           />
         </button>
       );
-    } else if (!this.props.hideImage && url && thumbnail && this.imageSrc) {
+    } else if (!this.props.hideImage && url && thumbnail && !isVideo(url)) {
       return (
         <a
           className="thumbnail rounded overflow-hidden d-inline-block position-relative p-0 border-0"
@@ -300,7 +350,7 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
           title={url}
           target={this.linkTarget}
         >
-          {this.imgThumb(this.imageSrc)}
+          {this.imgThumb(thumbnail)}
           <Icon
             icon="external-link"
             classes="d-block text-white position-absolute end-0 top-0 mini-overlay text-opacity-75 text-opacity-100-hover"
@@ -311,7 +361,12 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
       if ((!this.props.hideImage && isVideo(url)) || post.embed_video_url) {
         return (
           <a
-            className="text-body"
+            className={classNames(
+              "thumbnail rounded",
+              thumbnail
+                ? "overflow-hidden d-inline-block position-relative p-0 border-0"
+                : "text-body bg-light d-flex justify-content-center",
+            )}
             href={url}
             title={url}
             rel={relTags}
@@ -320,9 +375,15 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
             aria-label={I18NextService.i18n.t("expand_here")}
             target={this.linkTarget}
           >
-            <div className="thumbnail rounded bg-light d-flex justify-content-center">
-              <Icon icon="play" classes="d-flex align-items-center" />
-            </div>
+            {thumbnail && this.imgThumb(thumbnail)}
+            <Icon
+              icon="video"
+              classes={
+                thumbnail
+                  ? "d-block text-white position-absolute end-0 top-0 mini-overlay text-opacity-75 text-opacity-100-hover"
+                  : "d-flex align-items-center"
+              }
+            />
           </a>
         );
       } else {
@@ -357,7 +418,6 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
 
   createdLine() {
     const pv = this.postView;
-
     return (
       <div className="small mb-1 mb-md-0">
         <PersonListing person={pv.creator} />
@@ -383,7 +443,14 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
             }
           </span>
         )}{" "}
-        • <MomentTime published={pv.post.published} updated={pv.post.updated} />
+        {pv.post.scheduled_publish_time && (
+          <span className="mx-1 badge text-bg-light">
+            {I18NextService.i18n.t("publish_in_time", {
+              time: formatPastDate(pv.post.scheduled_publish_time),
+            })}
+          </span>
+        )}{" "}
+        · <MomentTime published={pv.post.published} updated={pv.post.updated} />
       </div>
     );
   }
@@ -503,20 +570,31 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
     const post = this.postView.post;
     const url = post.url;
 
-    return (
-      <p className="small m-0">
-        {url && !(hostname(url) === getExternalHost()) && (
-          <a
-            className="fst-italic link-dark link-opacity-75 link-opacity-100-hover"
-            href={url}
-            title={url}
-            rel={relTags}
-          >
-            {hostname(url)}
-          </a>
-        )}
-      </p>
-    );
+    if (url) {
+      // If its a torrent link, extract the download name
+      const linkName = isMagnetLink(url)
+        ? extractMagnetLinkDownloadName(url)
+        : !(hostname(url) === getExternalHost())
+          ? hostname(url)
+          : null;
+
+      if (linkName) {
+        return (
+          <p className="small m-0">
+            {url && !(hostname(url) === getExternalHost()) && (
+              <a
+                className="fst-italic link-dark link-opacity-75 link-opacity-100-hover"
+                href={url}
+                title={url}
+                rel={relTags}
+              >
+                {linkName}
+              </a>
+            )}
+          </p>
+        );
+      }
+    }
   }
 
   duplicatesLine() {
@@ -547,15 +625,15 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
     const {
       admins,
       moderators,
-      viewOnly,
       showBody,
       onPostVote,
       enableDownvotes,
+      voteDisplayMode,
     } = this.props;
     const {
-      post: { local, ap_id, id, body },
-      counts,
+      post: { ap_id, id, body },
       my_vote,
+      counts,
     } = this.postView;
 
     return (
@@ -570,29 +648,28 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
             <Icon icon="share" inline />
           </button>
         )}
-        {!local && (
-          <a
-            className="btn btn-sm btn-link btn-animate text-muted py-0"
-            title={I18NextService.i18n.t("link")}
-            href={ap_id}
-          >
-            <Icon icon="fedilink" inline />
-          </a>
-        )}
-        {mobile && !viewOnly && (
+        <a
+          className="btn btn-sm btn-link btn-animate text-muted py-0"
+          title={I18NextService.i18n.t("fedilink")}
+          href={ap_id}
+        >
+          <Icon icon="fedilink" inline />
+        </a>
+        {mobile && this.isInteractable && (
           <VoteButtonsCompact
             voteContentType={VoteContentType.Post}
             id={id}
             onVote={onPostVote}
-            enableDownvotes={enableDownvotes}
             counts={counts}
-            my_vote={my_vote}
+            enableDownvotes={enableDownvotes}
+            voteDisplayMode={voteDisplayMode}
+            myVote={my_vote}
           />
         )}
 
         {showBody && body && this.viewSourceButton}
 
-        {UserService.Instance.myUserInfo && !viewOnly && (
+        {UserService.Instance.myUserInfo && this.isInteractable && (
           <PostActionDropdown
             postView={this.postView}
             admins={admins}
@@ -614,6 +691,7 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
             onPurgeUser={this.handlePurgePerson}
             onPurgeContent={this.handlePurgePost}
             onAppointAdmin={this.handleAppointAdmin}
+            onHidePost={this.handleHidePost}
           />
         )}
       </div>
@@ -641,6 +719,7 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
         title={title}
         to={`/post/${pv.post.id}?scrollToComments=true`}
         data-tippy-content={title}
+        onClick={this.props.onScrollIntoCommentsClick}
       >
         <Icon icon="message-square" classes="me-1" inline />
         {pv.counts.comments}
@@ -681,19 +760,14 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
   }
 
   mobileThumbnail() {
-    const post = this.postView.post;
-    return post.thumbnail_url || (post.url && isImage(post.url)) ? (
+    return (
       <div className="row">
-        <div className={`${this.state.imageExpanded ? "col-12" : "col-9"}`}>
-          {this.postTitleLine()}
-        </div>
+        <div className="col-9">{this.postTitleLine()}</div>
         <div className="col-3 mobile-thumbnail-container">
           {/* Post thumbnail */}
-          {!this.state.imageExpanded && this.thumbnail()}
+          {this.thumbnail()}
         </div>
       </div>
-    ) : (
-      this.postTitleLine()
     );
   }
 
@@ -733,15 +807,16 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
         {/* The larger view*/}
         <div className="d-none d-sm-block">
           <article className="row post-container">
-            {!this.props.viewOnly && (
+            {this.isInteractable && (
               <div className="col flex-grow-0">
                 <VoteButtons
                   voteContentType={VoteContentType.Post}
                   id={this.postView.post.id}
                   onVote={this.props.onPostVote}
                   enableDownvotes={this.props.enableDownvotes}
+                  voteDisplayMode={this.props.voteDisplayMode}
                   counts={this.postView.counts}
-                  my_vote={this.postView.my_vote}
+                  myVote={this.postView.my_vote}
                 />
               </div>
             )}
@@ -791,9 +866,17 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
   }
 
   // The actual editing is done in the receive for post
-  handleEditPost(form: EditPost) {
-    this.setState({ showEdit: false });
-    return this.props.onPostEdit(form);
+  async handleEditPost(form: EditPost) {
+    this.setState({ loading: true });
+    const res = await this.props.onPostEdit(form);
+
+    if (res.state === "success") {
+      toast(I18NextService.i18n.t("edited_post"));
+      this.setState({ loading: false, showEdit: false });
+    } else if (res.state === "failed") {
+      toast(I18NextService.i18n.t(res.err.message), "danger");
+      this.setState({ loading: false });
+    }
   }
 
   handleShare(i: PostListing) {
@@ -834,7 +917,8 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
   }
 
   get crossPostParams(): CrossPostParams {
-    const { name, url } = this.postView.post;
+    const { name, url, alt_text, nsfw, language_id, thumbnail_url } =
+      this.postView.post;
     const crossPostParams: CrossPostParams = { name };
 
     if (url) {
@@ -844,6 +928,22 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
     const crossPostBody = this.crossPostBody();
     if (crossPostBody) {
       crossPostParams.body = crossPostBody;
+    }
+
+    if (alt_text) {
+      crossPostParams.altText = alt_text;
+    }
+
+    if (nsfw) {
+      crossPostParams.nsfw = nsfw ? "true" : "false";
+    }
+
+    if (language_id !== undefined) {
+      crossPostParams.languageId = language_id;
+    }
+
+    if (thumbnail_url) {
+      crossPostParams.customThumbnailUrl = thumbnail_url;
     }
 
     return crossPostParams;
@@ -909,10 +1009,17 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
     });
   }
 
+  handleHidePost() {
+    return this.props.onHidePost({
+      hide: !this.postView.hidden,
+      post_ids: [this.postView.post.id],
+    });
+  }
+
   handleModBanFromCommunity({
     daysUntilExpires,
     reason,
-    shouldRemove,
+    shouldRemoveOrRestoreData,
   }: BanUpdateForm) {
     const {
       creator: { id: person_id },
@@ -923,7 +1030,7 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
 
     // If its an unban, restore all their data
     if (ban === false) {
-      shouldRemove = false;
+      shouldRemoveOrRestoreData = true;
     }
     const expires = futureDaysToUnixTime(daysUntilExpires);
 
@@ -931,7 +1038,7 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
       community_id,
       person_id,
       ban,
-      remove_data: shouldRemove,
+      remove_or_restore_data: shouldRemoveOrRestoreData,
       reason,
       expires,
     });
@@ -940,7 +1047,7 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
   handleModBanFromSite({
     daysUntilExpires,
     reason,
-    shouldRemove,
+    shouldRemoveOrRestoreData,
   }: BanUpdateForm) {
     const {
       creator: { id: person_id, banned },
@@ -949,14 +1056,14 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
 
     // If its an unban, restore all their data
     if (ban === false) {
-      shouldRemove = false;
+      shouldRemoveOrRestoreData = true;
     }
     const expires = futureDaysToUnixTime(daysUntilExpires);
 
     return this.props.onBanPerson({
       person_id,
       ban,
-      remove_data: shouldRemove,
+      remove_or_restore_data: shouldRemoveOrRestoreData,
       reason,
       expires,
     });
@@ -987,7 +1094,6 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
   handleImageExpandClick(i: PostListing, event: any) {
     event.preventDefault();
     i.setState({ imageExpanded: !i.state.imageExpanded });
-    setupTippy();
 
     if (myAuth() && !i.postView.read) {
       i.props.onMarkPostAsRead({
@@ -1003,7 +1109,6 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
 
   handleShowBody(i: PostListing) {
     i.setState({ showBody: !i.state.showBody });
-    setupTippy();
   }
 
   get pointsTippy(): string {
@@ -1045,5 +1150,14 @@ export class PostListing extends Component<PostListingProps, PostListingState> {
 
   get canAdmin(): boolean {
     return canAdmin(this.postView.creator.id, this.props.admins);
+  }
+
+  get isInteractable() {
+    const {
+      viewOnly,
+      post_view: { banned_from_community },
+    } = this.props;
+
+    return !(viewOnly || banned_from_community);
   }
 }

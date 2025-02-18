@@ -2,19 +2,13 @@ import { Component } from "inferno";
 import { RouteComponentProps } from "inferno-router/dist/Route";
 import { UserService } from "../../services";
 import { Spinner } from "./icon";
-
-interface AuthGuardState {
-  hasRedirected: boolean;
-}
+import { getQueryString } from "@utils/helpers";
+import { isBrowser } from "@utils/browser";
 
 class AuthGuard extends Component<
   RouteComponentProps<Record<string, string>>,
-  AuthGuardState
+  any
 > {
-  state = {
-    hasRedirected: false,
-  } as AuthGuardState;
-
   constructor(
     props: RouteComponentProps<Record<string, string>>,
     context: any,
@@ -22,19 +16,21 @@ class AuthGuard extends Component<
     super(props, context);
   }
 
-  componentDidMount() {
-    if (!UserService.Instance.myUserInfo) {
+  hasAuth() {
+    return UserService.Instance.myUserInfo;
+  }
+
+  componentWillMount() {
+    if (!this.hasAuth() && isBrowser()) {
       const { pathname, search } = this.props.location;
       this.context.router.history.replace(
-        `/login?prev=${encodeURIComponent(pathname + search)}`,
+        `/login${getQueryString({ prev: pathname + search })}`,
       );
-    } else {
-      this.setState({ hasRedirected: true });
     }
   }
 
   render() {
-    return this.state.hasRedirected ? this.props.children : <Spinner />;
+    return this.hasAuth() ? this.props.children : <Spinner />;
   }
 }
 
