@@ -102,6 +102,7 @@ import { MediaUploads } from "../common/media-uploads";
 import { cakeDate } from "@utils/helpers";
 import { isBrowser } from "@utils/browser";
 import DisplayModal from "../common/modal/display-modal";
+import ViewVoteAnalyticsByVoterModal from "@/shared/components/common/modal/view-vote-analytics-by-voter-modal";
 
 type ProfileData = RouteDataResponse<{
   personRes: GetPersonDetailsResponse;
@@ -123,6 +124,7 @@ interface ProfileState {
   siteRes: GetSiteResponse;
   isIsomorphic: boolean;
   showRegistrationDialog: boolean;
+  showVoteAnalyticsByVoterDialog: boolean;
 }
 
 interface ProfileProps {
@@ -210,6 +212,7 @@ export class Profile extends Component<ProfileRouteProps, ProfileState> {
     isIsomorphic: false,
     showRegistrationDialog: false,
     registrationRes: EMPTY_REQUEST,
+    showVoteAnalyticsByVoterDialog: false,
   };
 
   loadingSettled() {
@@ -260,6 +263,8 @@ export class Profile extends Component<ProfileRouteProps, ProfileState> {
     this.handleModBanSubmit = this.handleModBanSubmit.bind(this);
     this.handleRegistrationShow = this.handleRegistrationShow.bind(this);
     this.handleRegistrationClose = this.handleRegistrationClose.bind(this);
+    this.toggleVoteAnalyticsByVoterShow =
+      this.toggleVoteAnalyticsByVoterShow.bind(this);
 
     // Only fetch the data if coming from another route
     if (FirstLoadService.isFirstLoad) {
@@ -637,6 +642,7 @@ export class Profile extends Component<ProfileRouteProps, ProfileState> {
       siteRes: { admins },
       showBanDialog,
       showRegistrationDialog,
+      showVoteAnalyticsByVoterDialog,
       registrationRes,
     } = this.state;
 
@@ -799,6 +805,25 @@ export class Profile extends Component<ProfileRouteProps, ProfileState> {
                           ""
                         )}
                       </DisplayModal>
+                    )}
+                  </>
+                )}
+                {amAdmin() && (
+                  <>
+                    <button
+                      className={
+                        "d-flex align-self-start btn btn-secondary me-2"
+                      }
+                      onClick={this.toggleVoteAnalyticsByVoterShow}
+                    >
+                      View given vote analytics
+                    </button>
+                    {showVoteAnalyticsByVoterDialog && (
+                      <ViewVoteAnalyticsByVoterModal
+                        person={pv.person}
+                        show={true}
+                        onCancel={this.toggleVoteAnalyticsByVoterShow}
+                      />
                     )}
                   </>
                 )}
@@ -1011,6 +1036,13 @@ export class Profile extends Component<ProfileRouteProps, ProfileState> {
 
   handleRegistrationClose() {
     this.setState({ showRegistrationDialog: false });
+  }
+
+  toggleVoteAnalyticsByVoterShow() {
+    this.setState({
+      showVoteAnalyticsByVoterDialog:
+        !this.state.showVoteAnalyticsByVoterDialog,
+    });
   }
 
   async handleModBanSubmit(i: Profile, event: any) {

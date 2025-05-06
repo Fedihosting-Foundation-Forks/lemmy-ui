@@ -10,7 +10,7 @@ import getQueryParams from "./get-query-params";
 import getQueryString from "./get-query-string";
 import getRandomCharFromAlphabet from "./get-random-char-from-alphabet";
 import getRandomFromList from "./get-random-from-list";
-import getUnixTime from "./get-unix-time";
+import { getUnixTime, unixTimeToLocalDateStr } from "./get-unix-time";
 import { groupBy } from "./group-by";
 import hostname from "./hostname";
 import hsl from "./hsl";
@@ -42,6 +42,7 @@ export {
   getRandomCharFromAlphabet,
   getRandomFromList,
   getUnixTime,
+  unixTimeToLocalDateStr,
   groupBy,
   hostname,
   hsl,

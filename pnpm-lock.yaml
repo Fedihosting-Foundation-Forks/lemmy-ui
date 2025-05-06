@@ -114,8 +114,8 @@ importers:
         specifier: ^4.0.0
         version: 4.0.0
       lemmy-js-client:
-        specifier: 0.19.11-donation-dialog.1
-        version: 0.19.11-donation-dialog.1
+        specifier: npm:@fedihosting-foundation-forks/lemmy-js-client@0.19.9-4-ge220ee3
+        version: '@fedihosting-foundation-forks/lemmy-js-client@0.19.9-4-ge220ee3'
       lodash.isequal:
         specifier: ^4.5.0
         version: 4.5.0
@@ -986,6 +986,9 @@ packages:
   '@eslint/object-schema@2.1.4':
     resolution: {integrity: sha512-BsWiH1yFGjXXS2yvrf5LyuoSIIbPrGUWob917o+BTKuZ7qJdxX8aJLRxs1fS9n6r7vESrq1OUqb68dANcFXuQQ==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
+  '@fedihosting-foundation-forks/lemmy-js-client@0.19.9-4-ge220ee3':
+    resolution: {integrity: sha512-yN2NHs73zUlSx+A0nD4xKpJp6OIT8HOaDY8mg22I904IZ1z+zvvBs187BILG/lMdwXWiK+xu2b5Y77iBV1BpfA==}
 
   '@humanwhocodes/module-importer@1.0.1':
     resolution: {integrity: sha512-bxveV4V8v5Yb4ncFTT3rPSgZBOpCkjfK0y4oVVVJwIuDVBRMDXrPyXRL988i5ap9m9bnyEEjWfm5WkBmtffLfA==}
@@ -3048,9 +3051,6 @@ packages:
 
   leac@0.6.0:
     resolution: {integrity: sha512-y+SqErxb8h7nE/fiEX07jsbuhrpO9lL8eca7/Y1nuWV2moNlXhyd59iDGcRf6moVyDMbmTNzL40SUyrFU/yDpg==}
-
-  lemmy-js-client@0.19.11-donation-dialog.1:
-    resolution: {integrity: sha512-dmny1WwteMY07EKLoOGYt46HVc7k6H+o0ZzCPcNcpaAVgK5jJ6fs2i2BfMrEtQwAdRzqyVtVX0gXHy17j/cWGw==}
 
   leven@3.1.0:
     resolution: {integrity: sha512-qsda+H8jTaUaN/x5vzW2rzc+8Rw4TAQ/4KjB46IwK5VH+IlVeeeje/EoZRpiXvIqjFgK84QffqPztGI3VBLG1A==}
@@ -5566,6 +5566,8 @@ snapshots:
 
   '@eslint/object-schema@2.1.4': {}
 
+  '@fedihosting-foundation-forks/lemmy-js-client@0.19.9-4-ge220ee3': {}
+
   '@humanwhocodes/module-importer@1.0.1': {}
 
   '@humanwhocodes/retry@0.3.0': {}
@@ -7811,8 +7813,6 @@ snapshots:
       shell-quote: 1.8.1
 
   leac@0.6.0: {}
-
-  lemmy-js-client@0.19.11-donation-dialog.1: {}
 
   leven@3.1.0: {}
 
