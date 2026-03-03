@@ -798,6 +798,46 @@ export class Profile extends Component<ProfileRouteProps, ProfileState> {
                         ) : (
                           ""
                         )}
+                        {registrationRes.state === "success" && (
+                          <>
+                            <hr />
+                            <article>
+                              <table className="fhf-inside-borders">
+                                <tbody>
+                                  <tr>
+                                    <th>Person ID</th>
+                                    <td>
+                                      {
+                                        registrationRes.data
+                                          .registration_application.creator.id
+                                      }
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <th>Local User ID</th>
+                                    <td>
+                                      {
+                                        registrationRes.data
+                                          .registration_application
+                                          .creator_local_user.id
+                                      }
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <th>Email</th>
+                                    <td>
+                                      {
+                                        registrationRes.data
+                                          .registration_application
+                                          .creator_local_user.email
+                                      }
+                                    </td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                            </article>
+                          </>
+                        )}
                       </DisplayModal>
                     )}
                   </>
