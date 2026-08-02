@@ -125,7 +125,7 @@
     "prettier-plugin-import-sort": "^0.0.7",
     "prettier-plugin-organize-imports": "^4.0.0",
     "prettier-plugin-packagejson": "^2.5.2",
-    "qs": "^6.13.0",
+    "qs": "^6.15.2",
     "rimraf": "^6.0.1",
     "sortpack": "^2.4.0",
     "style-loader": "^4.0.0",
