@@ -1,24 +1,20 @@
 import { capitalizeFirstLetter } from "@utils/helpers";
 import classNames from "classnames";
 import { Component, FormEvent, FormEventHandler } from "inferno";
-import { EditSite, LocalSiteRateLimit } from "lemmy-js-client";
+import { EditSite } from "lemmy-js-client";
+import {
+  RateLimitFormValues,
+  RateLimitType,
+  SiteRateLimits,
+  rateLimitTypes,
+  toRateLimitEditSite,
+} from "@utils/rate-limits";
 import { I18NextService } from "../../services";
 import { Icon, Spinner } from "../common/icon";
 import Tabs from "../common/tabs";
 
-const rateLimitTypes = [
-  "message",
-  "post",
-  "register",
-  "image",
-  "comment",
-  "search",
-  "import_user_settings",
-] as const;
-
-export type RateLimitType = (typeof rateLimitTypes)[number];
-
 interface RateLimitsProps {
+  type: RateLimitType;
   handleRateLimit: FormEventHandler<HTMLInputElement>;
   handleRateLimitIntervalSeconds: FormEventHandler<HTMLInputElement>;
   rateLimitValue?: number;
@@ -27,16 +23,17 @@ interface RateLimitsProps {
 }
 
 interface RateLimitFormProps {
-  rateLimits: LocalSiteRateLimit;
+  rateLimits: SiteRateLimits;
   loading: boolean;
   onSaveSite: (form: EditSite) => void;
 }
 
 interface RateLimitFormState {
-  form: Partial<Omit<LocalSiteRateLimit, "updated_at" | "published_at">>;
+  form: RateLimitFormValues;
 }
 
 function RateLimits({
+  type,
   handleRateLimit,
   handleRateLimitIntervalSeconds: handleRateLimitIntervalSeconds,
   rateLimitIntervalSeconds: rateLimitIntervalSeconds,
@@ -46,27 +43,31 @@ function RateLimits({
   return (
     <div role="tabpanel" className={classNames("mb-3 row", className)}>
       <div className="col-md-6">
-        <label htmlFor="rate-limit">
+        <label htmlFor={`rate-limit-${type}`}>
           {I18NextService.i18n.t("rate_limit")}
         </label>
         <input
           type="number"
-          id="rate-limit"
+          id={`rate-limit-${type}`}
           className="form-control"
           min={0}
+          max={2147483647}
+          step={1}
           value={rateLimitMaxRequests}
           onInput={handleRateLimit}
         />
       </div>
       <div className="col-md-6">
-        <label htmlFor="rate-limit-per-second">
+        <label htmlFor={`rate-limit-${type}-per-second`}>
           {I18NextService.i18n.t("per_second")}
         </label>
         <input
           type="number"
-          id="rate-limit-per-second"
+          id={`rate-limit-${type}-per-second`}
           className="form-control"
-          min={0}
+          min={type.startsWith("resend_verification_email") ? 1 : 0}
+          max={2147483647}
+          step={1}
           value={rateLimitIntervalSeconds}
           onInput={handleRateLimitIntervalSeconds}
         />
@@ -109,15 +110,7 @@ function submitRateLimitForm(
   event: FormEvent<HTMLFormElement>,
 ) {
   event.preventDefault();
-  const form: EditSite = Object.entries(i.state.form).reduce(
-    (acc, [key, val]) => {
-      acc[`rate_limit_${key}`] = val;
-      return acc;
-    },
-    {},
-  );
-
-  i.props.onSaveSite(form);
+  i.props.onSaveSite(toRateLimitEditSite(i.state.form));
 }
 
 export default class RateLimitsForm extends Component<
@@ -140,12 +133,16 @@ export default class RateLimitsForm extends Component<
           <Icon icon="info" classes="icon-inline me-2" />
           {I18NextService.i18n.t("rate_limit_info")}
         </div>
+        <p className="small">
+          {I18NextService.i18n.t("rate_limit_verification_email_info")}
+        </p>
         <Tabs
           tabs={rateLimitTypes.map(rateLimitType => ({
             key: rateLimitType,
             label: I18NextService.i18n.t(`rate_limit_${rateLimitType}`),
             getNode: isSelected => (
               <RateLimits
+                type={rateLimitType}
                 className={classNames("tab-pane show", {
                   active: isSelected,
                 })}
